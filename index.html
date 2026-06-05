@@ -7,6 +7,9 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<!-- Firebase CDN (compat版 = requireなし) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: #0a0a18; font-family: 'Hiragino Kaku Gothic ProN','Hiragino Sans','Noto Sans JP',sans-serif; color: #e8e4f0; }
@@ -20,10 +23,9 @@ input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel">
-const { useState, useEffect, useRef } = React;
-
-const FIREBASE_CONFIG = {
+<script>
+// Firebase初期化（compat版）
+const firebaseConfig = {
   apiKey: "AIzaSyCJ5oVAEIoF4zyVMtAFcscAbqbOrkMaJsg",
   authDomain: "social-ed-co.firebaseapp.com",
   projectId: "social-ed-co",
@@ -31,38 +33,28 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "826767929534",
   appId: "1:826767929534:web:cd9aa8e0b8e8645a1a2eef"
 };
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
 
-let db = null;
-let fsLib = null;
-
-async function initFirebase() {
-  if (db) return;
-  const [appMod, fsMod] = await Promise.all([
-    import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"),
-    import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js"),
-  ]);
-  const app = appMod.initializeApp(FIREBASE_CONFIG);
-  db = fsMod.getFirestore(app);
-  fsLib = fsMod;
-}
-
-const col = (name) => fsLib.collection(db, name);
-const docRef = (name, id) => fsLib.doc(db, name, id);
-const getDs = async (name) => { const s = await fsLib.getDocs(col(name)); return s.docs.map(d=>({id:d.id,...d.data()})); };
-const addD = (name, data) => fsLib.addDoc(col(name), data);
-const updD = (name, id, data) => fsLib.updateDoc(docRef(name,id), data);
-const delD = (name, id) => fsLib.deleteDoc(docRef(name,id));
-const onSnap = (name, cb) => fsLib.onSnapshot(col(name), snap => cb(snap.docs.map(d=>({id:d.id,...d.data()}))));
+// Firestore helpers
+const addD   = (col, data)    => db.collection(col).add(data);
+const updD   = (col, id, data)=> db.collection(col).doc(id).update(data);
+const delD   = (col, id)      => db.collection(col).doc(id).delete();
+const getDs  = (col)          => db.collection(col).get().then(s=>s.docs.map(d=>({id:d.id,...d.data()})));
+const onSnap = (col, cb)      => db.collection(col).onSnapshot(s=>cb(s.docs.map(d=>({id:d.id,...d.data()}))));
+</script>
+<script type="text/babel">
+const { useState, useEffect } = React;
 
 const defaultRooms = ["第1会議室","第2会議室","大ホール"];
 const getDIM = (y,m) => new Date(y,m+1,0).getDate();
-const getFD = (y,m) => new Date(y,m,1).getDay();
-const toDS = (y,m,d) => `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-const fmtD = (s) => { if(!s) return ""; const [y,m,d]=s.split("-"); return `${y}年${parseInt(m)}月${parseInt(d)}日`; };
-const WD = ["日","月","火","水","木","金","土"];
+const getFD  = (y,m) => new Date(y,m,1).getDay();
+const toDS   = (y,m,d) => `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+const fmtD   = (s) => { if(!s) return ""; const [y,m,d]=s.split("-"); return `${y}年${parseInt(m)}月${parseInt(d)}日`; };
+const WD     = ["日","月","火","水","木","金","土"];
 const hashPw = (s) => s ? s.split("").reduce((a,c)=>((a<<5)-a+c.charCodeAt(0))|0,0).toString(36) : "";
-const RH = [260,200,160,30,330,80];
-const rC = (rooms,room) => `hsl(${RH[Math.max(0,rooms.indexOf(room))%RH.length]},60%,55%)`;
+const RH     = [260,200,160,30,330,80];
+const rCol   = (rooms,room) => `hsl(${RH[Math.max(0,rooms.indexOf(room))%RH.length]},60%,55%)`;
 
 const exportCSV = (reservations) => {
   const hdr=["ID","会議室","申請者名","連絡先","用途","人数","開始日","終了日","開始時間","終了時間","申請日時","ステータス"];
@@ -76,7 +68,7 @@ const exportCSV = (reservations) => {
 
 const C={bg:"#0a0a18",panel:"#12122a",pb:"#1e1e3a",border:"#2d2d50",text:"#e8e4f0",muted:"#a090c0",dim:"#5a4a80",accent:"#7c6bdb",al:"#b0a0e0",danger:"#e06060",ok:"#4caf90"};
 const IS={width:"100%",background:"#0f0f1e",border:`1px solid ${C.border}`,borderRadius:"8px",padding:"10px 12px",color:C.text,fontSize:"14px",outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
-const sC=(s)=>s==="取消"?C.danger:s==="確認済"?C.ok:C.al;
+const sCol=(s)=>s==="取消"?C.danger:s==="確認済"?C.ok:C.al;
 
 const Modal=({title,onClose,children})=>(
   <div onClick={e=>e.target===e.currentTarget&&onClose()} style={{position:"fixed",inset:0,background:"rgba(10,10,24,0.88)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:"16px"}}>
@@ -91,27 +83,23 @@ const Modal=({title,onClose,children})=>(
 );
 
 const Lbl=({children})=><label style={{display:"block",fontSize:"11px",color:C.muted,letterSpacing:"0.1em",marginBottom:"5px",textTransform:"uppercase"}}>{children}</label>;
-
 const FI=({label,error,...p})=>(
   <div style={{marginBottom:"14px"}}>
     <Lbl>{label}{error&&<span style={{color:C.danger,marginLeft:"6px",fontSize:"10px",textTransform:"none"}}>{error}</span>}</Lbl>
     <input {...p} style={{...IS,...p.style}} onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.border}/>
   </div>
 );
-
 const FS=({label,children,...p})=>(
   <div style={{marginBottom:"14px"}}>
     <Lbl>{label}</Lbl>
     <select {...p} style={{...IS,appearance:"none"}}>{children}</select>
   </div>
 );
-
 const Btn=({children,variant="primary",size="md",...p})=>{
   const bv={primary:{background:`linear-gradient(135deg,${C.accent},#5b4fbf)`,color:"#fff",border:"none"},danger:{background:"transparent",color:C.danger,border:`1px solid ${C.danger}`},ghost:{background:"transparent",color:C.muted,border:`1px solid ${C.border}`}};
   const sz={sm:{padding:"6px 14px",fontSize:"12px"},md:{padding:"9px 18px",fontSize:"13px"}};
   return <button {...p} style={{...sz[size],...bv[variant],borderRadius:"8px",fontWeight:600,cursor:p.disabled?"not-allowed":"pointer",opacity:p.disabled?0.5:1,letterSpacing:"0.05em",fontFamily:"inherit",...p.style}} onMouseOver={e=>!p.disabled&&(e.currentTarget.style.opacity="0.82")} onMouseOut={e=>!p.disabled&&(e.currentTarget.style.opacity="1")}>{children}</button>;
 };
-
 const Spinner=()=>(
   <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"64px",gap:"16px"}}>
     <div style={{width:"36px",height:"36px",border:`3px solid ${C.border}`,borderTop:`3px solid ${C.accent}`,borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
@@ -202,7 +190,7 @@ const CalView=({reservations,rooms,onDayClick})=>{
         </select>
       </div>
       <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"14px"}}>
-        {rooms.map(r=><div key={r} style={{display:"flex",alignItems:"center",gap:"6px"}}><span style={{width:"9px",height:"9px",borderRadius:"50%",background:rC(rooms,r),display:"inline-block"}}/><span style={{fontSize:"12px",color:C.muted}}>{r}</span></div>)}
+        {rooms.map(r=><div key={r} style={{display:"flex",alignItems:"center",gap:"6px"}}><span style={{width:"9px",height:"9px",borderRadius:"50%",background:rCol(rooms,r),display:"inline-block"}}/><span style={{fontSize:"12px",color:C.muted}}>{r}</span></div>)}
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:"2px"}}>
         {WD.map((w,i)=><div key={w} style={{textAlign:"center",padding:"8px 4px",fontSize:"11px",fontWeight:700,color:i===0?C.danger:i===6?"#6080e0":C.dim,letterSpacing:"0.1em"}}>{w}</div>)}
@@ -215,7 +203,7 @@ const CalView=({reservations,rooms,onDayClick})=>{
             <div key={d} onClick={()=>onDayClick(ds,dr)} style={{minHeight:"68px",padding:"6px",borderRadius:"8px",cursor:"pointer",background:isTd?"rgba(124,107,219,0.15)":C.panel,border:isTd?`1px solid ${C.accent}`:`1px solid ${C.pb}`,transition:"background 0.12s"}} onMouseOver={e=>e.currentTarget.style.background=isTd?"rgba(124,107,219,0.25)":"#1a1a3a"} onMouseOut={e=>e.currentTarget.style.background=isTd?"rgba(124,107,219,0.15)":C.panel}>
               <span style={{fontSize:"12px",fontWeight:isTd?700:400,color:isTd?C.al:dow===0?C.danger:dow===6?"#6080e0":"#c0b0e0"}}>{d}</span>
               <div style={{marginTop:"3px",display:"flex",flexDirection:"column",gap:"2px"}}>
-                {dr.slice(0,3).map(r=><div key={r.id} style={{fontSize:"10px",background:rC(rooms,r.room)+"33",color:rC(rooms,r.room),borderLeft:`2px solid ${rC(rooms,r.room)}`,padding:"1px 4px",borderRadius:"2px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.room}</div>)}
+                {dr.slice(0,3).map(r=><div key={r.id} style={{fontSize:"10px",background:rCol(rooms,r.room)+"33",color:rCol(rooms,r.room),borderLeft:`2px solid ${rCol(rooms,r.room)}`,padding:"1px 4px",borderRadius:"2px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.room}</div>)}
                 {dr.length>3&&<div style={{fontSize:"9px",color:C.dim}}>+{dr.length-3}件</div>}
               </div>
             </div>
@@ -232,7 +220,7 @@ const DayDtl=({dateStr,resForDay,rooms,onClose,onEdit,onCancel})=>(
     :resForDay.map(r=>(
       <div key={r.id} style={{background:"#0f0f1e",border:`1px solid ${C.border}`,borderRadius:"10px",padding:"14px",marginBottom:"10px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
-          <span style={{fontWeight:700,color:rC(rooms,r.room),fontSize:"15px"}}>{r.room}</span>
+          <span style={{fontWeight:700,color:rCol(rooms,r.room),fontSize:"15px"}}>{r.room}</span>
           <span style={{fontSize:"12px",color:C.accent}}>{r.startTime}〜{r.endTime}</span>
         </div>
         <div style={{fontSize:"13px",color:C.muted,lineHeight:"1.9"}}>👤 {r.name}　📞 {r.contact}<br/>📋 {r.purpose}　👥 {r.people}人</div>
@@ -265,7 +253,7 @@ const HistView=({reservations,rooms,onEdit,onCancel})=>{
                 <td style={{padding:"10px 12px",color:C.muted,textAlign:"center"}}>{r.people}人</td>
                 <td style={{padding:"10px 12px",color:C.muted,whiteSpace:"nowrap",fontSize:"12px"}}>{r.startDate===r.endDate?fmtD(r.startDate):`${fmtD(r.startDate)}〜${fmtD(r.endDate)}`}</td>
                 <td style={{padding:"10px 12px",color:C.muted,whiteSpace:"nowrap",fontSize:"12px"}}>{r.startTime}〜{r.endTime}</td>
-                <td style={{padding:"10px 12px"}}><span style={{padding:"2px 10px",borderRadius:"20px",fontSize:"11px",fontWeight:700,color:sC(r.status),border:`1px solid ${sC(r.status)}33`,background:`${sC(r.status)}11`}}>{r.status}</span></td>
+                <td style={{padding:"10px 12px"}}><span style={{padding:"2px 10px",borderRadius:"20px",fontSize:"11px",fontWeight:700,color:sCol(r.status),border:`1px solid ${sCol(r.status)}33`,background:`${sCol(r.status)}11`}}>{r.status}</span></td>
                 <td style={{padding:"10px 12px"}}>{r.status!=="取消"&&<div style={{display:"flex",gap:"6px"}}><Btn variant="ghost" size="sm" onClick={()=>onEdit(r)}>編集</Btn><Btn variant="danger" size="sm" onClick={()=>onCancel(r)}>取消</Btn></div>}</td>
               </tr>
             ))}
@@ -289,7 +277,7 @@ const RoomMgr=({rooms,onAdd,onRemove,loading})=>{
         {rooms.map(r=>(
           <div key={r} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#0f0f1e",border:`1px solid ${C.border}`,borderRadius:"8px",padding:"12px 16px"}}>
             <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
-              <span style={{width:"10px",height:"10px",borderRadius:"50%",background:rC(rooms,r),display:"inline-block"}}/>
+              <span style={{width:"10px",height:"10px",borderRadius:"50%",background:rCol(rooms,r),display:"inline-block"}}/>
               <span style={{color:C.text,fontSize:"14px"}}>{r}</span>
             </div>
             <Btn variant="danger" size="sm" onClick={()=>onRemove(r)} disabled={rooms.length<=1}>削除</Btn>
@@ -316,10 +304,13 @@ function App() {
 
   useEffect(()=>{
     let u1,u2;
-    initFirebase().then(()=>{
+    try {
       u1=onSnap("meeting_rooms",docs=>{ if(docs.length>0) setRooms(docs.map(d=>d.name).filter(Boolean)); });
       u2=onSnap("meeting_reservations",docs=>{ setReservations(docs); setReady(true); });
-    }).catch(e=>{ setFireErr("Firebase接続エラー: "+e.message); setReady(true); });
+    } catch(e) {
+      setFireErr("Firebase接続エラー: "+e.message);
+      setReady(true);
+    }
     return ()=>{ u1&&u1(); u2&&u2(); };
   },[]);
 
