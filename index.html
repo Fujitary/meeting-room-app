@@ -271,7 +271,7 @@ const RoomMgr=({rooms,onAdd,onRemove,loading})=>{
   return(
     <div>
       <div style={{display:"flex",gap:"8px",marginBottom:"16px"}}>
-        <input value={nr} onChange={e=>setNr(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="会議室名を入力" style={{...IS,flex:1}}/>
+        <input value={nr} onChange={e=>setNr(e.target.value)}  placeholder="会議室名を入力" style={{...IS,flex:1}}/>
         <Btn onClick={add} disabled={loading}>追加</Btn>
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
