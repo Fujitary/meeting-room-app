@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>会議室予約システム</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0a18; font-family: 'Hiragino Kaku Gothic ProN','Hiragino Sans','Noto Sans JP',sans-serif; color: #e8e4f0; }
+input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #0a0a18; }
+::-webkit-scrollbar-thumb { background: #2d2d50; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCJ5oVAEIoF4zyVMtAFcscAbqbOrkMaJsg",
+  authDomain: "social-ed-co.firebaseapp.com",
+  projectId: "social-ed-co",
+  storageBucket: "social-ed-co.firebasestorage.app",
+  messagingSenderId: "826767929534",
+  appId: "1:826767929534:web:cd9aa8e0b8e8645a1a2eef"
+};
+
+let db = null;
+let fsLib = null;
+
+async function initFirebase() {
+  if (db) return;
+  const [appMod, fsMod] = await Promise.all([
+    import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"),
+    import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js"),
+  ]);
+  const app = appMod.initializeApp(FIREBASE_CONFIG);
+  db = fsMod.getFirestore(app);
+  fsLib = fsMod;
+}
+
+const col = (name) => fsLib.collection(db, name);
+const docRef = (name, id) => fsLib.doc(db, name, id);
+const getDs = async (name) => { const s = await fsLib.getDocs(col(name)); return s.docs.map(d=>({id:d.id,...d.data()})); };
+const addD = (name, data) => fsLib.addDoc(col(name), data);
+const updD = (name, id, data) => fsLib.updateDoc(docRef(name,id), data);
+const delD = (name, id) => fsLib.deleteDoc(docRef(name,id));
+const onSnap = (name, cb) => fsLib.onSnapshot(col(name), snap => cb(snap.docs.map(d=>({id:d.id,...d.data()}))));
+
+const defaultRooms = ["第1会議室","第2会議室","大ホール"];
+const getDIM = (y,m) => new Date(y,m+1,0).getDate();
+const getFD = (y,m) => new Date(y,m,1).getDay();
+const toDS = (y,m,d) => `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+const fmtD = (s) => { if(!s) return ""; const [y,m,d]=s.split("-"); return `${y}年${parseInt(m)}月${parseInt(d)}日`; };
+const WD = ["日","月","火","水","木","金","土"];
+const hashPw = (s) => s ? s.split("").reduce((a,c)=>((a<<5)-a+c.charCodeAt(0))|0,0).toString(36) : "";
+const RH = [260,200,160,30,330,80];
+const rC = (rooms,room) => `hsl(${RH[Math.max(0,rooms.indexOf(room))%RH.length]},60%,55%)`;
+
+const exportCSV = (reservations) => {
+  const hdr=["ID","会議室","申請者名","連絡先","用途","人数","開始日","終了日","開始時間","終了時間","申請日時","ステータス"];
+  const rows=reservations.map(r=>[r.id,r.room,r.name,r.contact,r.purpose,r.people,r.startDate,r.endDate,r.startTime,r.endTime,r.createdAt,r.status]);
+  const csv=[hdr,...rows].map(row=>row.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\n");
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"}));
+  a.download=`会議室申請履歴_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+};
+
+const C={bg:"#0a0a18",panel:"#12122a",pb:"#1e1e3a",border:"#2d2d50",text:"#e8e4f0",muted:"#a090c0",dim:"#5a4a80",accent:"#7c6bdb",al:"#b0a0e0",danger:"#e06060",ok:"#4caf90"};
+const IS={width:"100%",background:"#0f0f1e",border:`1px solid ${C.border}`,borderRadius:"8px",padding:"10px 12px",color:C.text,fontSize:"14px",outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
+const sC=(s)=>s==="取消"?C.danger:s==="確認済"?C.ok:C.al;
+
+const Modal=({title,onClose,children})=>(
+  <div onClick={e=>e.target===e.currentTarget&&onClose()} style={{position:"fixed",inset:0,background:"rgba(10,10,24,0.88)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:"16px"}}>
+    <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:"16px",width:"100%",maxWidth:"520px",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 32px 80px rgba(0,0,0,0.7)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 24px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:C.panel,zIndex:1}}>
+        <h2 style={{margin:0,fontSize:"15px",fontWeight:700,color:C.text,letterSpacing:"0.05em"}}>{title}</h2>
+        <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,fontSize:"22px",cursor:"pointer",lineHeight:1,padding:"2px 6px"}}>×</button>
+      </div>
+      <div style={{padding:"24px"}}>{children}</div>
+    </div>
+  </div>
+);
+
+const Lbl=({children})=><label style={{display:"block",fontSize:"11px",color:C.muted,letterSpacing:"0.1em",marginBottom:"5px",textTransform:"uppercase"}}>{children}</label>;
+
+const FI=({label,error,...p})=>(
+  <div style={{marginBottom:"14px"}}>
+    <Lbl>{label}{error&&<span style={{color:C.danger,marginLeft:"6px",fontSize:"10px",textTransform:"none"}}>{error}</span>}</Lbl>
+    <input {...p} style={{...IS,...p.style}} onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.border}/>
+  </div>
+);
+
+const FS=({label,children,...p})=>(
+  <div style={{marginBottom:"14px"}}>
+    <Lbl>{label}</Lbl>
+    <select {...p} style={{...IS,appearance:"none"}}>{children}</select>
+  </div>
+);
+
+const Btn=({children,variant="primary",size="md",...p})=>{
+  const bv={primary:{background:`linear-gradient(135deg,${C.accent},#5b4fbf)`,color:"#fff",border:"none"},danger:{background:"transparent",color:C.danger,border:`1px solid ${C.danger}`},ghost:{background:"transparent",color:C.muted,border:`1px solid ${C.border}`}};
+  const sz={sm:{padding:"6px 14px",fontSize:"12px"},md:{padding:"9px 18px",fontSize:"13px"}};
+  return <button {...p} style={{...sz[size],...bv[variant],borderRadius:"8px",fontWeight:600,cursor:p.disabled?"not-allowed":"pointer",opacity:p.disabled?0.5:1,letterSpacing:"0.05em",fontFamily:"inherit",...p.style}} onMouseOver={e=>!p.disabled&&(e.currentTarget.style.opacity="0.82")} onMouseOut={e=>!p.disabled&&(e.currentTarget.style.opacity="1")}>{children}</button>;
+};
+
+const Spinner=()=>(
+  <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"64px",gap:"16px"}}>
+    <div style={{width:"36px",height:"36px",border:`3px solid ${C.border}`,borderTop:`3px solid ${C.accent}`,borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
+    <span style={{color:C.dim,fontSize:"13px"}}>Firebaseに接続中…</span>
+  </div>
+);
+
+const PwDialog=({storedHash,onConfirm,onCancel})=>{
+  const [pw,setPw]=useState(""),[err,setErr]=useState("");
+  const confirm=()=>{ if(!storedHash){onConfirm();return;} if(hashPw(pw)===storedHash) onConfirm(); else setErr("パスワードが違います"); };
+  return(
+    <Modal title="パスワード確認" onClose={onCancel}>
+      <p style={{color:C.muted,fontSize:"13px",marginTop:0}}>この申請を変更・取り消しするにはパスワードを入力してください。</p>
+      <FI label="4桁パスワード" type="password" maxLength={4} value={pw} onChange={e=>{setPw(e.target.value);setErr("");}} placeholder="****"/>
+      {err&&<p style={{color:C.danger,fontSize:"12px",marginTop:"-8px"}}>{err}</p>}
+      <div style={{display:"flex",gap:"8px",justifyContent:"flex-end"}}>
+        <Btn variant="ghost" onClick={onCancel}>キャンセル</Btn>
+        <Btn onClick={confirm}>確認</Btn>
+      </div>
+    </Modal>
+  );
+};
+
+const TIMES=Array.from({length:48},(_,i)=>`${String(Math.floor(i/2)).padStart(2,"0")}:${i%2===0?"00":"30"}`);
+
+const ResForm=({rooms,onSubmit,onClose,initial=null,loading})=>{
+  const [f,setF]=useState({room:initial?.room||rooms[0]||"",name:initial?.name||"",contact:initial?.contact||"",purpose:initial?.purpose||"",people:initial?.people||"",startDate:initial?.startDate||"",endDate:initial?.endDate||"",startTime:initial?.startTime||"09:00",endTime:initial?.endTime||"10:00",password:""});
+  const [err,setErr]=useState({});
+  const set=(k,v)=>setF(x=>({...x,[k]:v}));
+  const validate=()=>{
+    const e={};
+    if(!f.room) e.room="必須";
+    if(!f.name.trim()) e.name="必須";
+    if(!f.contact.trim()) e.contact="必須";
+    if(!f.purpose.trim()) e.purpose="必須";
+    if(!f.people||isNaN(f.people)||Number(f.people)<1) e.people="1以上";
+    if(!f.startDate) e.startDate="必須";
+    if(!f.endDate) e.endDate="必須";
+    if(f.startDate&&f.endDate&&f.startDate>f.endDate) e.endDate="終了日が開始日より前";
+    if(!initial&&(!f.password||f.password.length!==4||isNaN(f.password))) e.password="4桁の数字";
+    return e;
+  };
+  const submit=()=>{ const e=validate(); if(Object.keys(e).length){setErr(e);return;} onSubmit({...f,people:Number(f.people),passwordHash:initial?initial.passwordHash:hashPw(f.password)}); };
+  return(
+    <Modal title={initial?"申請を編集":"会議室申請"} onClose={onClose}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 14px"}}>
+        <div style={{gridColumn:"1/-1"}}><FS label="会議室" value={f.room} onChange={e=>set("room",e.target.value)}>{rooms.map(r=><option key={r}>{r}</option>)}</FS></div>
+        <FI label="申請者名" error={err.name} value={f.name} onChange={e=>set("name",e.target.value)} placeholder="山田 太郎"/>
+        <FI label="連絡先" error={err.contact} value={f.contact} onChange={e=>set("contact",e.target.value)} placeholder="090-xxxx-xxxx"/>
+        <div style={{gridColumn:"1/-1"}}><FI label="用途" error={err.purpose} value={f.purpose} onChange={e=>set("purpose",e.target.value)} placeholder="全体会議、研修など"/></div>
+        <FI label="人数" error={err.people} type="number" min="1" value={f.people} onChange={e=>set("people",e.target.value)}/>
+        <div/>
+        <FI label="開始日" error={err.startDate} type="date" value={f.startDate} onChange={e=>set("startDate",e.target.value)}/>
+        <FI label="終了日" error={err.endDate} type="date" value={f.endDate} onChange={e=>set("endDate",e.target.value)}/>
+        <FS label="開始時間" value={f.startTime} onChange={e=>set("startTime",e.target.value)}>{TIMES.map(t=><option key={t}>{t}</option>)}</FS>
+        <FS label="終了時間" value={f.endTime} onChange={e=>set("endTime",e.target.value)}>{TIMES.map(t=><option key={t}>{t}</option>)}</FS>
+        {!initial&&(
+          <div style={{gridColumn:"1/-1"}}>
+            <FI label="パスワード（4桁数字）" error={err.password} type="password" maxLength={4} value={f.password} onChange={e=>set("password",e.target.value)} placeholder="修正・取消時に使用"/>
+            <p style={{fontSize:"11px",color:C.dim,marginTop:"-6px",marginBottom:0}}>※後から修正・取り消しするときに使います</p>
+          </div>
+        )}
+      </div>
+      <div style={{display:"flex",gap:"8px",justifyContent:"flex-end",marginTop:"12px"}}>
+        <Btn variant="ghost" onClick={onClose}>キャンセル</Btn>
+        <Btn onClick={submit} disabled={loading}>{loading?"保存中…":initial?"保存":"申請する"}</Btn>
+      </div>
+    </Modal>
+  );
+};
+
+const CalView=({reservations,rooms,onDayClick})=>{
+  const today=new Date();
+  const [year,setYear]=useState(today.getFullYear());
+  const [month,setMonth]=useState(today.getMonth());
+  const [fr,setFr]=useState("すべて");
+  const active=reservations.filter(r=>r.status!=="取消");
+  const days=getDIM(year,month),first=getFD(year,month);
+  const getDR=(d)=>{ const ds=toDS(year,month,d); return active.filter(r=>(fr==="すべて"||r.room===fr)&&r.startDate<=ds&&r.endDate>=ds); };
+  return(
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"20px",flexWrap:"wrap"}}>
+        <button onClick={()=>{if(month===0){setMonth(11);setYear(y=>y-1);}else setMonth(m=>m-1);}} style={{background:C.border,border:"none",color:C.text,borderRadius:"8px",padding:"8px 14px",cursor:"pointer",fontSize:"16px"}}>‹</button>
+        <span style={{fontSize:"18px",fontWeight:700,color:C.text,minWidth:"120px",textAlign:"center"}}>{year}年 {month+1}月</span>
+        <button onClick={()=>{if(month===11){setMonth(0);setYear(y=>y+1);}else setMonth(m=>m+1);}} style={{background:C.border,border:"none",color:C.text,borderRadius:"8px",padding:"8px 14px",cursor:"pointer",fontSize:"16px"}}>›</button>
+        <select value={fr} onChange={e=>setFr(e.target.value)} style={{marginLeft:"auto",background:C.panel,border:`1px solid ${C.border}`,color:C.text,padding:"8px 12px",borderRadius:"8px",fontFamily:"inherit",fontSize:"13px"}}>
+          <option>すべて</option>{rooms.map(r=><option key={r}>{r}</option>)}
+        </select>
+      </div>
+      <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"14px"}}>
+        {rooms.map(r=><div key={r} style={{display:"flex",alignItems:"center",gap:"6px"}}><span style={{width:"9px",height:"9px",borderRadius:"50%",background:rC(rooms,r),display:"inline-block"}}/><span style={{fontSize:"12px",color:C.muted}}>{r}</span></div>)}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:"2px"}}>
+        {WD.map((w,i)=><div key={w} style={{textAlign:"center",padding:"8px 4px",fontSize:"11px",fontWeight:700,color:i===0?C.danger:i===6?"#6080e0":C.dim,letterSpacing:"0.1em"}}>{w}</div>)}
+        {Array(first).fill(null).map((_,i)=><div key={"e"+i}/>)}
+        {Array(days).fill(null).map((_,i)=>{
+          const d=i+1,ds=toDS(year,month,d),dr=getDR(d);
+          const isTd=ds===toDS(today.getFullYear(),today.getMonth(),today.getDate());
+          const dow=(first+i)%7;
+          return(
+            <div key={d} onClick={()=>onDayClick(ds,dr)} style={{minHeight:"68px",padding:"6px",borderRadius:"8px",cursor:"pointer",background:isTd?"rgba(124,107,219,0.15)":C.panel,border:isTd?`1px solid ${C.accent}`:`1px solid ${C.pb}`,transition:"background 0.12s"}} onMouseOver={e=>e.currentTarget.style.background=isTd?"rgba(124,107,219,0.25)":"#1a1a3a"} onMouseOut={e=>e.currentTarget.style.background=isTd?"rgba(124,107,219,0.15)":C.panel}>
+              <span style={{fontSize:"12px",fontWeight:isTd?700:400,color:isTd?C.al:dow===0?C.danger:dow===6?"#6080e0":"#c0b0e0"}}>{d}</span>
+              <div style={{marginTop:"3px",display:"flex",flexDirection:"column",gap:"2px"}}>
+                {dr.slice(0,3).map(r=><div key={r.id} style={{fontSize:"10px",background:rC(rooms,r.room)+"33",color:rC(rooms,r.room),borderLeft:`2px solid ${rC(rooms,r.room)}`,padding:"1px 4px",borderRadius:"2px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.room}</div>)}
+                {dr.length>3&&<div style={{fontSize:"9px",color:C.dim}}>+{dr.length-3}件</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const DayDtl=({dateStr,resForDay,rooms,onClose,onEdit,onCancel})=>(
+  <Modal title={`${fmtD(dateStr)} の予約`} onClose={onClose}>
+    {resForDay.length===0?<p style={{color:C.dim,textAlign:"center",padding:"16px 0"}}>この日の予約はありません</p>
+    :resForDay.map(r=>(
+      <div key={r.id} style={{background:"#0f0f1e",border:`1px solid ${C.border}`,borderRadius:"10px",padding:"14px",marginBottom:"10px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+          <span style={{fontWeight:700,color:rC(rooms,r.room),fontSize:"15px"}}>{r.room}</span>
+          <span style={{fontSize:"12px",color:C.accent}}>{r.startTime}〜{r.endTime}</span>
+        </div>
+        <div style={{fontSize:"13px",color:C.muted,lineHeight:"1.9"}}>👤 {r.name}　📞 {r.contact}<br/>📋 {r.purpose}　👥 {r.people}人</div>
+        {r.status!=="取消"&&<div style={{display:"flex",gap:"8px",marginTop:"10px"}}><Btn variant="ghost" size="sm" onClick={()=>onEdit(r)}>編集</Btn><Btn variant="danger" size="sm" onClick={()=>onCancel(r)}>取消</Btn></div>}
+      </div>
+    ))}
+  </Modal>
+);
+
+const HistView=({reservations,rooms,onEdit,onCancel})=>{
+  const [fr,setFr]=useState("すべて"),[fs,setFs]=useState("すべて"),[q,setQ]=useState("");
+  const filt=reservations.filter(r=>(fr==="すべて"||r.room===fr)&&(fs==="すべて"||r.status===fs)&&(r.name.includes(q)||r.purpose.includes(q)||r.room.includes(q))).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  return(
+    <div>
+      <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"16px"}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 名前・用途で検索" style={{...IS,flex:1,minWidth:"140px",background:C.panel}}/>
+        <select value={fr} onChange={e=>setFr(e.target.value)} style={{...IS,width:"auto",background:C.panel}}><option>すべて</option>{rooms.map(r=><option key={r}>{r}</option>)}</select>
+        <select value={fs} onChange={e=>setFs(e.target.value)} style={{...IS,width:"auto",background:C.panel}}>{["すべて","申請中","確認済","取消"].map(s=><option key={s}>{s}</option>)}</select>
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
+          <thead><tr>{["会議室","申請者","用途","人数","期間","時間","ステータス","操作"].map(h=><th key={h} style={{padding:"10px 12px",textAlign:"left",color:C.dim,fontSize:"11px",letterSpacing:"0.1em",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filt.length===0&&<tr><td colSpan={8} style={{padding:"32px",textAlign:"center",color:C.dim}}>申請はありません</td></tr>}
+            {filt.map(r=>(
+              <tr key={r.id} style={{borderBottom:`1px solid ${C.pb}`}} onMouseOver={e=>e.currentTarget.style.background="#14142a"} onMouseOut={e=>e.currentTarget.style.background=""}>
+                <td style={{padding:"10px 12px",color:C.al,whiteSpace:"nowrap"}}>{r.room}</td>
+                <td style={{padding:"10px 12px",color:C.text}}>{r.name}</td>
+                <td style={{padding:"10px 12px",color:C.muted,maxWidth:"120px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.purpose}</td>
+                <td style={{padding:"10px 12px",color:C.muted,textAlign:"center"}}>{r.people}人</td>
+                <td style={{padding:"10px 12px",color:C.muted,whiteSpace:"nowrap",fontSize:"12px"}}>{r.startDate===r.endDate?fmtD(r.startDate):`${fmtD(r.startDate)}〜${fmtD(r.endDate)}`}</td>
+                <td style={{padding:"10px 12px",color:C.muted,whiteSpace:"nowrap",fontSize:"12px"}}>{r.startTime}〜{r.endTime}</td>
+                <td style={{padding:"10px 12px"}}><span style={{padding:"2px 10px",borderRadius:"20px",fontSize:"11px",fontWeight:700,color:sC(r.status),border:`1px solid ${sC(r.status)}33`,background:`${sC(r.status)}11`}}>{r.status}</span></td>
+                <td style={{padding:"10px 12px"}}>{r.status!=="取消"&&<div style={{display:"flex",gap:"6px"}}><Btn variant="ghost" size="sm" onClick={()=>onEdit(r)}>編集</Btn><Btn variant="danger" size="sm" onClick={()=>onCancel(r)}>取消</Btn></div>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const RoomMgr=({rooms,onAdd,onRemove,loading})=>{
+  const [nr,setNr]=useState("");
+  const add=()=>{ const r=nr.trim(); if(r&&!rooms.includes(r)){onAdd(r);setNr("");} };
+  return(
+    <div>
+      <div style={{display:"flex",gap:"8px",marginBottom:"16px"}}>
+        <input value={nr} onChange={e=>setNr(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="会議室名を入力" style={{...IS,flex:1,background:"#0f0f1e"}}/>
+        <Btn onClick={add} disabled={loading}>追加</Btn>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
+        {rooms.map(r=>(
+          <div key={r} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#0f0f1e",border:`1px solid ${C.border}`,borderRadius:"8px",padding:"12px 16px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+              <span style={{width:"10px",height:"10px",borderRadius:"50%",background:rC(rooms,r),display:"inline-block"}}/>
+              <span style={{color:C.text,fontSize:"14px"}}>{r}</span>
+            </div>
+            <Btn variant="danger" size="sm" onClick={()=>onRemove(r)} disabled={rooms.length<=1}>削除</Btn>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+function App() {
+  const [ready,setReady]=useState(false);
+  const [fireErr,setFireErr]=useState(null);
+  const [reservations,setReservations]=useState([]);
+  const [rooms,setRooms]=useState(defaultRooms);
+  const [tab,setTab]=useState("calendar");
+  const [busy,setBusy]=useState(false);
+  const [showForm,setShowForm]=useState(false);
+  const [editTarget,setEditTarget]=useState(null);
+  const [cancelTarget,setCancelTarget]=useState(null);
+  const [pwTarget,setPwTarget]=useState(null);
+  const [pwAction,setPwAction]=useState(null);
+  const [dayDetail,setDayDetail]=useState(null);
+
+  useEffect(()=>{
+    let u1,u2;
+    initFirebase().then(()=>{
+      u1=onSnap("meeting_rooms",docs=>{ if(docs.length>0) setRooms(docs.map(d=>d.name).filter(Boolean)); });
+      u2=onSnap("meeting_reservations",docs=>{ setReservations(docs); setReady(true); });
+    }).catch(e=>{ setFireErr("Firebase接続エラー: "+e.message); setReady(true); });
+    return ()=>{ u1&&u1(); u2&&u2(); };
+  },[]);
+
+  const addRoom=async(name)=>{ setBusy(true); try{ await addD("meeting_rooms",{name}); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const removeRoom=async(name)=>{ setBusy(true); try{ const docs=await getDs("meeting_rooms"); const t=docs.find(d=>d.name===name); if(t) await delD("meeting_rooms",t.id); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const addRes=async(form)=>{ setBusy(true); try{ const now=new Date().toISOString(); await addD("meeting_reservations",{...form,status:"申請中",createdAt:now,updatedAt:now}); setShowForm(false); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const updateRes=async(form)=>{ setBusy(true); try{ await updD("meeting_reservations",editTarget.id,{...form,updatedAt:new Date().toISOString()}); setEditTarget(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const cancelRes=async()=>{ setBusy(true); try{ await updD("meeting_reservations",cancelTarget.id,{status:"取消",updatedAt:new Date().toISOString()}); setCancelTarget(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const reqEdit=(r)=>{ setDayDetail(null); setPwTarget(r); setPwAction("edit"); };
+  const reqCancel=(r)=>{ setDayDetail(null); setPwTarget(r); setPwAction("cancel"); };
+  const pwConfirm=()=>{ if(pwAction==="edit") setEditTarget(pwTarget); if(pwAction==="cancel") setCancelTarget(pwTarget); setPwTarget(null); setPwAction(null); };
+
+  const TABS=[{id:"calendar",label:"📅 カレンダー"},{id:"history",label:"📋 履歴"},{id:"rooms",label:"🏢 会議室管理"}];
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg}}>
+      <div style={{background:"linear-gradient(135deg,#12122a,#1a1040)",borderBottom:`1px solid ${C.border}`,padding:"0 24px",position:"sticky",top:0,zIndex:100,boxShadow:"0 4px 24px rgba(0,0,0,0.4)"}}>
+        <div style={{maxWidth:"980px",margin:"0 auto",display:"flex",alignItems:"center",gap:"12px",padding:"14px 0",flexWrap:"wrap"}}>
+          <div>
+            <div style={{fontSize:"17px",fontWeight:800,letterSpacing:"0.05em",background:`linear-gradient(135deg,${C.al},${C.accent})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>会議室予約システム</div>
+            <div style={{fontSize:"10px",color:C.dim,letterSpacing:"0.15em"}}>MEETING ROOM RESERVATION · リアルタイム同期</div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:"6px",marginLeft:"8px"}}>
+            <span style={{width:"7px",height:"7px",borderRadius:"50%",background:ready?C.ok:C.dim,display:"inline-block",animation:"pulse 2s infinite"}}/>
+            <span style={{fontSize:"11px",color:ready?C.ok:C.dim}}>{ready?"LIVE":"接続中"}</span>
+          </div>
+          <div style={{marginLeft:"auto",display:"flex",gap:"8px",flexWrap:"wrap"}}>
+            <Btn onClick={()=>setShowForm(true)}>＋ 新規申請</Btn>
+            <Btn variant="ghost" size="sm" onClick={()=>exportCSV(reservations)}>CSV出力</Btn>
+          </div>
+        </div>
+        <div style={{display:"flex",maxWidth:"980px",margin:"0 auto"}}>
+          {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{background:"none",border:"none",color:tab===t.id?C.al:C.dim,padding:"10px 16px",cursor:"pointer",fontFamily:"inherit",fontSize:"13px",fontWeight:700,borderBottom:tab===t.id?`2px solid ${C.accent}`:"2px solid transparent",letterSpacing:"0.05em"}}>{t.label}</button>)}
+        </div>
+      </div>
+
+      <div style={{maxWidth:"980px",margin:"0 auto",padding:"24px 16px"}}>
+        {!ready?<Spinner/>:fireErr?(
+          <div style={{background:"#2a1010",border:`1px solid ${C.danger}`,borderRadius:"12px",padding:"24px",color:C.danger}}>{fireErr}</div>
+        ):(
+          <>
+            {tab==="calendar"&&(
+              <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"20px"}}>
+                {[{label:"総申請数",val:reservations.length,color:C.accent},{label:"申請中",val:reservations.filter(r=>r.status==="申請中").length,color:C.al},{label:"取消済",val:reservations.filter(r=>r.status==="取消").length,color:C.danger}].map(c=>(
+                  <div key={c.label} style={{background:C.panel,border:`1px solid ${c.color}33`,borderRadius:"10px",padding:"10px 18px",display:"flex",gap:"8px",alignItems:"baseline"}}>
+                    <span style={{fontSize:"20px",fontWeight:800,color:c.color}}>{c.val}</span>
+                    <span style={{fontSize:"12px",color:C.dim}}>{c.label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{background:C.panel,border:`1px solid ${C.pb}`,borderRadius:"16px",padding:"24px"}}>
+              {tab==="calendar"&&<CalView reservations={reservations} rooms={rooms} onDayClick={(d,r)=>setDayDetail({dateStr:d,resForDay:r})}/>}
+              {tab==="history"&&<HistView reservations={reservations} rooms={rooms} onEdit={reqEdit} onCancel={reqCancel}/>}
+              {tab==="rooms"&&<RoomMgr rooms={rooms} onAdd={addRoom} onRemove={removeRoom} loading={busy}/>}
+            </div>
+          </>
+        )}
+      </div>
+
+      {showForm&&<ResForm rooms={rooms} onSubmit={addRes} onClose={()=>setShowForm(false)} loading={busy}/>}
+      {editTarget&&<ResForm rooms={rooms} initial={editTarget} onSubmit={updateRes} onClose={()=>setEditTarget(null)} loading={busy}/>}
+      {cancelTarget&&(
+        <Modal title="申請を取り消しますか？" onClose={()=>setCancelTarget(null)}>
+          <p style={{color:C.muted,fontSize:"13px"}}><strong style={{color:C.text}}>{cancelTarget.name}</strong> さんの <strong style={{color:C.text}}>「{cancelTarget.room}」</strong> の申請を取り消します。この操作は元に戻せません。</p>
+          <div style={{display:"flex",gap:"8px",justifyContent:"flex-end",marginTop:"16px"}}>
+            <Btn variant="ghost" onClick={()=>setCancelTarget(null)}>やめる</Btn>
+            <Btn variant="danger" onClick={cancelRes} disabled={busy}>{busy?"処理中…":"取り消す"}</Btn>
+          </div>
+        </Modal>
+      )}
+      {pwTarget&&<PwDialog storedHash={pwTarget.passwordHash} onConfirm={pwConfirm} onCancel={()=>{setPwTarget(null);setPwAction(null);}}/>}
+      {dayDetail&&<DayDtl dateStr={dayDetail.dateStr} resForDay={dayDetail.resForDay} rooms={rooms} onClose={()=>setDayDetail(null)} onEdit={reqEdit} onCancel={reqCancel}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
