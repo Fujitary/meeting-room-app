@@ -4,28 +4,26 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>会議室予約システム</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%23ff6b6b'/><rect x='10' y='18' width='44' height='32' rx='4' fill='white' opacity='0.95'/><rect x='16' y='10' width='6' height='16' rx='3' fill='%23ff6b6b'/><rect x='42' y='10' width='6' height='16' rx='3' fill='%23ff6b6b'/><rect x='10' y='28' width='44' height='3' fill='%23ff6b6b' opacity='0.3'/><rect x='17' y='35' width='8' height='8' rx='2' fill='%23ff6b6b' opacity='0.7'/><rect x='28' y='35' width='8' height='8' rx='2' fill='%234ecdc4' opacity='0.7'/><rect x='39' y='35' width='8' height='8' rx='2' fill='%23ffe66d' opacity='0.9'/></svg>"/>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%235b7fa6'/><rect x='10' y='18' width='44' height='32' rx='4' fill='white' opacity='0.95'/><rect x='16' y='10' width='6' height='16' rx='3' fill='%235b7fa6'/><rect x='42' y='10' width='6' height='16' rx='3' fill='%235b7fa6'/><rect x='10' y='28' width='44' height='3' fill='%235b7fa6' opacity='0.3'/><rect x='17' y='35' width='8' height='8' rx='2' fill='%235b7fa6' opacity='0.7'/><rect x='28' y='35' width='8' height='8' rx='2' fill='%2376a89e' opacity='0.7'/><rect x='39' y='35' width='8' height='8' rx='2' fill='%23e8a87c' opacity='0.9'/></svg>"/>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<!-- Firebase CDN (compat版 = requireなし) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #f0f4ff; font-family: 'Hiragino Kaku Gothic ProN','Hiragino Sans','Noto Sans JP',sans-serif; color: #1a1a2e; }
-input[type=date]::-webkit-calendar-picker-indicator { filter: none; }
+body { background: #eef1f7; font-family: 'Hiragino Kaku Gothic ProN','Hiragino Sans','Noto Sans JP',sans-serif; color: #2c3a50; }
+input[type=date]::-webkit-calendar-picker-indicator { filter: none; opacity: 0.6; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #e8eeff; }
-::-webkit-scrollbar-thumb { background: #c0c8f0; border-radius: 3px; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #e8ecf4; }
+::-webkit-scrollbar-thumb { background: #b8c4d8; border-radius: 4px; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script>
-// Firebase初期化（compat版）
 const firebaseConfig = {
   apiKey: "AIzaSyCJ5oVAEIoF4zyVMtAFcscAbqbOrkMaJsg",
   authDomain: "social-ed-co.firebaseapp.com",
@@ -36,87 +34,130 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
-
-// Firestore helpers
-const addD   = (col, data)    => db.collection(col).add(data);
-const updD   = (col, id, data)=> db.collection(col).doc(id).update(data);
-const delD   = (col, id)      => db.collection(col).doc(id).delete();
-const getDs  = (col)          => db.collection(col).get().then(s=>s.docs.map(d=>({id:d.id,...d.data()})));
-const onSnap = (col, cb)      => db.collection(col).onSnapshot(s=>cb(s.docs.map(d=>({id:d.id,...d.data()}))));
+const addD    = (col, data)     => db.collection(col).add(data);
+const updD    = (col, id, data) => db.collection(col).doc(id).update(data);
+const delD    = (col, id)       => db.collection(col).doc(id).delete();
+const getDs   = (col)           => db.collection(col).get().then(s => s.docs.map(d => ({ id: d.id, ...d.data() })));
+const onSnap  = (col, cb)       => db.collection(col).onSnapshot(s => cb(s.docs.map(d => ({ id: d.id, ...d.data() }))));
 </script>
 <script type="text/babel">
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef, useCallback } = React;
 
-const defaultRooms = ["第1会議室","第2会議室","大ホール"];
-const getDIM = (y,m) => new Date(y,m+1,0).getDate();
-const getFD  = (y,m) => new Date(y,m,1).getDay();
-const toDS   = (y,m,d) => `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-const fmtD   = (s) => { if(!s) return ""; const [y,m,d]=s.split("-"); return `${y}年${parseInt(m)}月${parseInt(d)}日`; };
-const WD     = ["日","月","火","水","木","金","土"];
-const hashPw = (s) => s ? s.split("").reduce((a,c)=>((a<<5)-a+c.charCodeAt(0))|0,0).toString(36) : "";
-const RH     = [260,200,160,30,330,80];
-const rCol   = (rooms,room) => `hsl(${RH[Math.max(0,rooms.indexOf(room))%RH.length]},60%,55%)`;
+// ── palette ──────────────────────────────────────────────
+const P = {
+  bg:       '#eef1f7',
+  panel:    '#ffffff',
+  border:   '#d8dfe8',
+  text:     '#2c3a50',
+  muted:    '#6b7a8d',
+  dim:      '#9aaabb',
+  accent:   '#5b7fa6',
+  accentL:  '#7a9ec0',
+  green:    '#5a9e8a',
+  orange:   '#d4845a',
+  danger:   '#b05070',
+  ok:       '#4e8f78',
+  header:   '#3d5a7a',
+};
 
-const exportCSV = (reservations) => {
-  const hdr=["ID","会議室","申請者名","連絡先","用途","人数","開始日","終了日","開始時間","終了時間","申請日時","ステータス"];
-  const rows=reservations.map(r=>[r.id,r.room,r.name,r.contact,r.purpose,r.people,r.startDate,r.endDate,r.startTime,r.endTime,r.createdAt,r.status]);
-  const csv=[hdr,...rows].map(row=>row.map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(",")).join("\n");
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"}));
-  a.download=`会議室申請履歴_${new Date().toISOString().slice(0,10)}.csv`;
+const ROOM_COLORS = [
+  { bg:'#7a9ec044', border:'#5b7fa6', text:'#3d5a7a' },
+  { bg:'#7ab89444', border:'#4e8f78', text:'#2d6052' },
+  { bg:'#d4845a44', border:'#c06a3a', text:'#7a3a1a' },
+  { bg:'#9b7ac844', border:'#7a5aaa', text:'#4a2a7a' },
+  { bg:'#c8a03044', border:'#a07a10', text:'#6a4a00' },
+  { bg:'#c86a7a44', border:'#a04060', text:'#6a1030' },
+];
+const getRoomColor = (rooms, room) => ROOM_COLORS[Math.max(0, rooms.indexOf(room)) % ROOM_COLORS.length];
+
+// ── utils ─────────────────────────────────────────────────
+const pad  = n => String(n).padStart(2, '0');
+const toDS = (y, m, d) => `${y}-${pad(m+1)}-${pad(d)}`;
+const dsAdd = (ds, days) => { const d = new Date(ds); d.setDate(d.getDate() + days); return d.toISOString().slice(0,10); };
+const getDIM = (y, m) => new Date(y, m+1, 0).getDate();
+const getFD  = (y, m) => new Date(y, m, 1).getDay();
+const fmtD   = s => { if(!s) return ''; const [y,m,d] = s.split('-'); return `${y}年${+m}月${+d}日`; };
+const fmtShort = s => { if(!s) return ''; const [,m,d] = s.split('-'); return `${+m}/${+d}`; };
+const hashPw = s => s ? s.split('').reduce((a,c) => ((a<<5)-a+c.charCodeAt(0))|0, 0).toString(36) : '';
+const WD = ['日','月','火','水','木','金','土'];
+const today = () => { const d = new Date(); return toDS(d.getFullYear(), d.getMonth(), d.getDate()); };
+
+const timeToMin = t => { const [h,m] = t.split(':').map(Number); return h*60+m; };
+const minToTime = m => `${pad(Math.floor(m/60))}:${pad(m%60)}`;
+const HOURS = Array.from({length:24}, (_,i) => i);
+const TIMES = Array.from({length:48}, (_,i) => `${pad(Math.floor(i/2))}:${i%2===0?'00':'30'}`);
+
+const exportCSV = reservations => {
+  const hdr = ['ID','会議室','申請者名','連絡先','用途','人数','開始日','終了日','開始時間','終了時間','申請日時','ステータス'];
+  const rows = reservations.map(r => [r.id,r.room,r.name,r.contact,r.purpose,r.people,r.startDate,r.endDate,r.startTime,r.endTime,r.createdAt,r.status]);
+  const csv = [hdr,...rows].map(row => row.map(v => `"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'}));
+  a.download = `会議室申請履歴_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
 };
 
-const C={bg:"#f0f4ff",panel:"#ffffff",pb:"#e0e8ff",border:"#d0d8f8",text:"#1a1a2e",muted:"#6b7280",dim:"#9ca3af",accent:"#ff6b6b",al:"#ee5a24",danger:"#e84393",ok:"#00d2a0",live:"#00b4d8"};
-const IS={width:"100%",background:"#f8faff",border:`2px solid ${C.border}`,borderRadius:"10px",padding:"10px 12px",color:C.text,fontSize:"14px",outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
-const sCol=(s)=>s==="取消"?C.danger:s==="確認済"?C.ok:"#7c6bdb";
+// ── design tokens ─────────────────────────────────────────
+const IS = { width:'100%', background:'#f5f7fc', border:`1.5px solid ${P.border}`, borderRadius:'8px', padding:'9px 11px', color:P.text, fontSize:'14px', outline:'none', boxSizing:'border-box', fontFamily:'inherit' };
+const sColor = s => s==='取消' ? P.danger : s==='確認済' ? P.ok : P.accentL;
 
-const Modal=({title,onClose,children})=>(
-  <div onClick={e=>e.target===e.currentTarget&&onClose()} style={{position:"fixed",inset:0,background:"rgba(30,30,80,0.6)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:"16px"}}>
-    <div style={{background:"#fff",border:"1px solid #e0e8ff",borderRadius:"16px",width:"100%",maxWidth:"520px",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 32px 80px rgba(0,0,0,0.7)"}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 24px",borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,background:"#fff",zIndex:1}}>
-        <h2 style={{margin:0,fontSize:"15px",fontWeight:700,color:"#1a1a2e",letterSpacing:"0.05em"}}>{title}</h2>
-        <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,fontSize:"22px",cursor:"pointer",lineHeight:1,padding:"2px 6px"}}>×</button>
+// ── primitives ────────────────────────────────────────────
+const Modal = ({title, onClose, children, width='520px'}) => (
+  <div onClick={e=>e.target===e.currentTarget&&onClose()} style={{position:'fixed',inset:0,background:'rgba(44,58,80,0.5)',backdropFilter:'blur(4px)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:2000,padding:'16px'}}>
+    <div style={{background:P.panel,border:`1px solid ${P.border}`,borderRadius:'16px',width:'100%',maxWidth:width,maxHeight:'92vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(44,58,80,0.2)'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'16px 22px',borderBottom:`1px solid ${P.border}`,position:'sticky',top:0,background:P.panel,zIndex:1}}>
+        <h2 style={{margin:0,fontSize:'15px',fontWeight:700,color:P.text}}>{title}</h2>
+        <button onClick={onClose} style={{background:'none',border:'none',color:P.muted,fontSize:'20px',cursor:'pointer',lineHeight:1,padding:'2px 6px'}}>×</button>
       </div>
-      <div style={{padding:"24px"}}>{children}</div>
+      <div style={{padding:'22px'}}>{children}</div>
     </div>
   </div>
 );
 
-const Lbl=({children})=><label style={{display:"block",fontSize:"11px",color:"#7c6bdb",letterSpacing:"0.1em",marginBottom:"5px",textTransform:"uppercase"}}>{children}</label>;
-const FI=({label,error,...p})=>(
-  <div style={{marginBottom:"14px"}}>
-    <Lbl>{label}{error&&<span style={{color:C.danger,marginLeft:"6px",fontSize:"10px",textTransform:"none"}}>{error}</span>}</Lbl>
-    <input {...p} style={{...IS,...p.style}} onFocus={e=>e.target.style.borderColor="#ff6b6b"} onBlur={e=>e.target.style.borderColor="#d0d8f8"}/>
+const Lbl = ({children}) => <label style={{display:'block',fontSize:'11px',color:P.muted,letterSpacing:'0.08em',marginBottom:'5px',textTransform:'uppercase'}}>{children}</label>;
+const FI  = ({label, error, ...p}) => (
+  <div style={{marginBottom:'13px'}}>
+    <Lbl>{label}{error && <span style={{color:P.danger,marginLeft:'6px',fontSize:'10px',textTransform:'none'}}>{error}</span>}</Lbl>
+    <input {...p} style={{...IS,...p.style}} onFocus={e=>e.target.style.borderColor=P.accent} onBlur={e=>e.target.style.borderColor=P.border}/>
   </div>
 );
-const FS=({label,children,...p})=>(
-  <div style={{marginBottom:"14px"}}>
+const FS = ({label, children, ...p}) => (
+  <div style={{marginBottom:'13px'}}>
     <Lbl>{label}</Lbl>
-    <select {...p} style={{...IS,appearance:"none"}}>{children}</select>
+    <select {...p} style={{...IS,appearance:'none',...p.style}}>{children}</select>
   </div>
 );
-const Btn=({children,variant="primary",size="md",...p})=>{
-  const bv={primary:{background:"linear-gradient(135deg,#ff6b6b,#ee5a24)",color:"#fff",border:"none"},danger:{background:"transparent",color:C.danger,border:`1px solid ${C.danger}`},ghost:{background:"transparent",color:"#7c6bdb",border:"1px solid #c0c8f0"}};
-  const sz={sm:{padding:"6px 14px",fontSize:"12px"},md:{padding:"9px 18px",fontSize:"13px"}};
-  return <button {...p} style={{...sz[size],...bv[variant],borderRadius:"8px",fontWeight:600,cursor:p.disabled?"not-allowed":"pointer",opacity:p.disabled?0.5:1,letterSpacing:"0.05em",fontFamily:"inherit",...p.style}} onMouseOver={e=>!p.disabled&&(e.currentTarget.style.opacity="0.82")} onMouseOut={e=>!p.disabled&&(e.currentTarget.style.opacity="1")}>{children}</button>;
+const Btn = ({children, variant='primary', size='md', ...p}) => {
+  const bv = {
+    primary: {background:`linear-gradient(135deg,${P.accent},#4a6a8e)`,color:'#fff',border:'none'},
+    danger:  {background:'transparent',color:P.danger,border:`1px solid ${P.danger}`},
+    ghost:   {background:'transparent',color:P.muted,border:`1px solid ${P.border}`},
+    soft:    {background:'#eef1f7',color:P.accent,border:`1px solid ${P.border}`},
+  };
+  const sz = {sm:{padding:'5px 13px',fontSize:'12px'}, md:{padding:'8px 16px',fontSize:'13px'}};
+  return <button {...p} style={{...sz[size],...bv[variant],borderRadius:'8px',fontWeight:600,cursor:p.disabled?'not-allowed':'pointer',opacity:p.disabled?0.5:1,letterSpacing:'0.04em',fontFamily:'inherit',transition:'opacity 0.15s',...p.style}} onMouseOver={e=>!p.disabled&&(e.currentTarget.style.opacity='0.85')} onMouseOut={e=>!p.disabled&&(e.currentTarget.style.opacity='1')}>{children}</button>;
 };
-const Spinner=()=>(
-  <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"64px",gap:"16px"}}>
-    <div style={{width:"36px",height:"36px",border:"3px solid #f0e0ff",borderTop:"3px solid #ff6b6b",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
-    <span style={{color:"#bbb",fontSize:"13px"}}>Firebaseに接続中…</span>
+
+const Spinner = () => (
+  <div style={{display:'flex',flexDirection:'column',alignItems:'center',padding:'64px',gap:'14px'}}>
+    <div style={{width:'34px',height:'34px',border:'3px solid #dde3ed',borderTop:`3px solid ${P.accent}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/>
+    <span style={{color:P.dim,fontSize:'13px'}}>Firebaseに接続中…</span>
   </div>
 );
 
-const PwDialog=({storedHash,onConfirm,onCancel})=>{
-  const [pw,setPw]=useState(""),[err,setErr]=useState("");
-  const confirm=()=>{ if(!storedHash){onConfirm();return;} if(hashPw(pw)===storedHash) onConfirm(); else setErr("パスワードが違います"); };
-  return(
+// ── Password dialog ───────────────────────────────────────
+const PwDialog = ({storedHash, onConfirm, onCancel}) => {
+  const [pw, setPw] = useState(''), [err, setErr] = useState('');
+  const confirm = () => {
+    if (!storedHash) { onConfirm(); return; }
+    if (hashPw(pw) === storedHash) onConfirm(); else setErr('パスワードが違います');
+  };
+  return (
     <Modal title="パスワード確認" onClose={onCancel}>
-      <p style={{color:"#6b7280",fontSize:"13px",marginTop:0}}>この申請を変更・取り消しするにはパスワードを入力してください。</p>
-      <FI label="4桁パスワード" type="password" maxLength={4} value={pw} onChange={e=>{setPw(e.target.value);setErr("");}} placeholder="****"/>
-      {err&&<p style={{color:C.danger,fontSize:"12px",marginTop:"-8px"}}>{err}</p>}
-      <div style={{display:"flex",gap:"8px",justifyContent:"flex-end"}}>
+      <p style={{color:P.muted,fontSize:'13px',marginTop:0}}>この申請を変更・取り消しするにはパスワードを入力してください。</p>
+      <FI label="4桁パスワード" type="password" maxLength={4} value={pw} onChange={e=>{setPw(e.target.value);setErr('');}} placeholder="****"/>
+      {err && <p style={{color:P.danger,fontSize:'12px',marginTop:'-6px'}}>{err}</p>}
+      <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
         <Btn variant="ghost" onClick={onCancel}>キャンセル</Btn>
         <Btn onClick={confirm}>確認</Btn>
       </div>
@@ -124,88 +165,294 @@ const PwDialog=({storedHash,onConfirm,onCancel})=>{
   );
 };
 
-const TIMES=Array.from({length:48},(_,i)=>`${String(Math.floor(i/2)).padStart(2,"0")}:${i%2===0?"00":"30"}`);
-
-const ResForm=({rooms,onSubmit,onClose,initial=null,loading})=>{
-  const [f,setF]=useState({room:initial?.room||rooms[0]||"",name:initial?.name||"",contact:initial?.contact||"",purpose:initial?.purpose||"",people:initial?.people||"",startDate:initial?.startDate||"",endDate:initial?.endDate||"",startTime:initial?.startTime||"09:00",endTime:initial?.endTime||"10:00",password:""});
-  const [err,setErr]=useState({});
-  const set=(k,v)=>setF(x=>({...x,[k]:v}));
-  const validate=()=>{
-    const e={};
-    if(!f.room) e.room="必須";
-    if(!f.name.trim()) e.name="必須";
-    if(!f.contact.trim()) e.contact="必須";
-    if(!f.purpose.trim()) e.purpose="必須";
-    if(!f.people||isNaN(f.people)||Number(f.people)<1) e.people="1以上";
-    if(!f.startDate) e.startDate="必須";
-    if(!f.endDate) e.endDate="必須";
-    if(f.startDate&&f.endDate&&f.startDate>f.endDate) e.endDate="終了日が開始日より前";
-    if(!initial&&(!f.password||f.password.length!==4||isNaN(f.password))) e.password="4桁の数字";
+// ── Reservation form ──────────────────────────────────────
+const ResForm = ({rooms, onSubmit, onClose, initial=null, loading, prefill=null}) => {
+  const [f, setF] = useState({
+    room:      initial?.room      || rooms[0] || '',
+    name:      initial?.name      || '',
+    contact:   initial?.contact   || '',
+    purpose:   initial?.purpose   || '',
+    people:    initial?.people    || '',
+    startDate: initial?.startDate || prefill?.date || '',
+    endDate:   initial?.endDate   || prefill?.date || '',
+    startTime: initial?.startTime || prefill?.startTime || '09:00',
+    endTime:   initial?.endTime   || prefill?.endTime   || '10:00',
+    password:  '',
+  });
+  const [err, setErr] = useState({});
+  const set = (k,v) => setF(x => ({...x, [k]:v}));
+  const validate = () => {
+    const e = {};
+    if (!f.room) e.room = '必須';
+    if (!f.name.trim()) e.name = '必須';
+    if (!f.contact.trim()) e.contact = '必須';
+    if (!f.purpose.trim()) e.purpose = '必須';
+    if (!f.people || isNaN(f.people) || Number(f.people)<1) e.people = '1以上';
+    if (!f.startDate) e.startDate = '必須';
+    if (!f.endDate) e.endDate = '必須';
+    if (f.startDate && f.endDate && f.startDate > f.endDate) e.endDate = '終了日が開始日より前';
+    if (!initial && (!f.password || f.password.length !== 4 || isNaN(f.password))) e.password = '4桁の数字';
     return e;
   };
-  const submit=()=>{ const e=validate(); if(Object.keys(e).length){setErr(e);return;} onSubmit({...f,people:Number(f.people),passwordHash:initial?initial.passwordHash:hashPw(f.password)}); };
-  return(
-    <Modal title={initial?"申請を編集":"会議室申請"} onClose={onClose}>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 14px"}}>
-        <div style={{gridColumn:"1/-1"}}><FS label="会議室" value={f.room} onChange={e=>set("room",e.target.value)}>{rooms.map(r=><option key={r}>{r}</option>)}</FS></div>
-        <FI label="申請者名" error={err.name} value={f.name} onChange={e=>set("name",e.target.value)} placeholder="山田 太郎"/>
-        <FI label="連絡先" error={err.contact} value={f.contact} onChange={e=>set("contact",e.target.value)} placeholder="090-xxxx-xxxx"/>
-        <div style={{gridColumn:"1/-1"}}><FI label="用途" error={err.purpose} value={f.purpose} onChange={e=>set("purpose",e.target.value)} placeholder="全体会議、研修など"/></div>
-        <FI label="人数" error={err.people} type="number" min="1" value={f.people} onChange={e=>set("people",e.target.value)}/>
+  const submit = () => {
+    const e = validate();
+    if (Object.keys(e).length) { setErr(e); return; }
+    onSubmit({...f, people:Number(f.people), passwordHash: initial ? initial.passwordHash : hashPw(f.password)});
+  };
+  return (
+    <Modal title={initial ? '申請を編集' : '会議室申請'} onClose={onClose}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0 13px'}}>
+        <div style={{gridColumn:'1/-1'}}><FS label="会議室" value={f.room} onChange={e=>set('room',e.target.value)}>{rooms.map(r=><option key={r}>{r}</option>)}</FS></div>
+        <FI label="申請者名" error={err.name} value={f.name} onChange={e=>set('name',e.target.value)} placeholder="山田 太郎"/>
+        <FI label="連絡先" error={err.contact} value={f.contact} onChange={e=>set('contact',e.target.value)} placeholder="090-xxxx-xxxx"/>
+        <div style={{gridColumn:'1/-1'}}><FI label="用途" error={err.purpose} value={f.purpose} onChange={e=>set('purpose',e.target.value)} placeholder="全体会議、研修など"/></div>
+        <FI label="人数" error={err.people} type="number" min="1" value={f.people} onChange={e=>set('people',e.target.value)}/>
         <div/>
-        <FI label="開始日" error={err.startDate} type="date" value={f.startDate} onChange={e=>set("startDate",e.target.value)}/>
-        <FI label="終了日" error={err.endDate} type="date" value={f.endDate} onChange={e=>set("endDate",e.target.value)}/>
-        <FS label="開始時間" value={f.startTime} onChange={e=>set("startTime",e.target.value)}>{TIMES.map(t=><option key={t}>{t}</option>)}</FS>
-        <FS label="終了時間" value={f.endTime} onChange={e=>set("endTime",e.target.value)}>{TIMES.map(t=><option key={t}>{t}</option>)}</FS>
-        {!initial&&(
-          <div style={{gridColumn:"1/-1"}}>
-            <FI label="パスワード（4桁数字）" error={err.password} type="password" maxLength={4} value={f.password} onChange={e=>set("password",e.target.value)} placeholder="修正・取消時に使用"/>
-            <p style={{fontSize:"11px",color:"#9ca3af",marginTop:"-6px",marginBottom:0}}>※後から修正・取り消しするときに使います</p>
+        <FI label="開始日" error={err.startDate} type="date" value={f.startDate} onChange={e=>set('startDate',e.target.value)}/>
+        <FI label="終了日" error={err.endDate} type="date" value={f.endDate} onChange={e=>set('endDate',e.target.value)}/>
+        <FS label="開始時間" value={f.startTime} onChange={e=>set('startTime',e.target.value)}>{TIMES.map(t=><option key={t}>{t}</option>)}</FS>
+        <FS label="終了時間" value={f.endTime} onChange={e=>set('endTime',e.target.value)}>{TIMES.map(t=><option key={t}>{t}</option>)}</FS>
+        {!initial && (
+          <div style={{gridColumn:'1/-1'}}>
+            <FI label="パスワード（4桁数字）" error={err.password} type="password" maxLength={4} value={f.password} onChange={e=>set('password',e.target.value)} placeholder="修正・取消時に使用"/>
+            <p style={{fontSize:'11px',color:P.dim,marginTop:'-5px',marginBottom:0}}>※後から修正・取り消しするときに使います</p>
           </div>
         )}
       </div>
-      <div style={{display:"flex",gap:"8px",justifyContent:"flex-end",marginTop:"12px"}}>
+      <div style={{display:'flex',gap:'8px',justifyContent:'flex-end',marginTop:'10px'}}>
         <Btn variant="ghost" onClick={onClose}>キャンセル</Btn>
-        <Btn onClick={submit} disabled={loading}>{loading?"保存中…":initial?"保存":"申請する"}</Btn>
+        <Btn onClick={submit} disabled={loading}>{loading ? '保存中…' : initial ? '保存' : '申請する'}</Btn>
       </div>
     </Modal>
   );
 };
 
-const CalView=({reservations,rooms,onDayClick})=>{
-  const today=new Date();
-  const [year,setYear]=useState(today.getFullYear());
-  const [month,setMonth]=useState(today.getMonth());
-  const [fr,setFr]=useState("すべて");
-  const active=reservations.filter(r=>r.status!=="取消");
-  const days=getDIM(year,month),first=getFD(year,month);
-  const getDR=(d)=>{ const ds=toDS(year,month,d); return active.filter(r=>(fr==="すべて"||r.room===fr)&&r.startDate<=ds&&r.endDate>=ds); };
-  return(
-    <div>
-      <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"20px",flexWrap:"wrap"}}>
-        <button onClick={()=>{if(month===0){setMonth(11);setYear(y=>y-1);}else setMonth(m=>m-1);}} style={{background:"#ffe0e0",border:"none",color:C.accent,borderRadius:"8px",padding:"8px 14px",cursor:"pointer",fontSize:"16px",fontWeight:700}}>‹</button>
-        <span style={{fontSize:"18px",fontWeight:700,color:C.text,minWidth:"120px",textAlign:"center"}}>{year}年 {month+1}月</span>
-        <button onClick={()=>{if(month===11){setMonth(0);setYear(y=>y+1);}else setMonth(m=>m+1);}} style={{background:"#ffe0e0",border:"none",color:C.accent,borderRadius:"8px",padding:"8px 14px",cursor:"pointer",fontSize:"16px",fontWeight:700}}>›</button>
-        <select value={fr} onChange={e=>setFr(e.target.value)} style={{marginLeft:"auto",background:"#fff",border:"1px solid #d0d8f8",color:C.text,padding:"8px 12px",borderRadius:"8px",fontFamily:"inherit",fontSize:"13px"}}>
-          <option>すべて</option>{rooms.map(r=><option key={r}>{r}</option>)}
-        </select>
+// ── Day View (Google Calendar style) ─────────────────────
+const CELL_H = 56; // px per hour
+const DAY_START = 0;
+const DAY_HOURS = 24;
+
+const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResClick}) => {
+  const active = reservations.filter(r => r.status !== '取消' && r.startDate <= dateStr && r.endDate >= dateStr);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 8 * CELL_H;
+  }, [dateStr]);
+
+  // drag-to-select state
+  const [drag, setDrag] = useState(null);
+  const gridRef = useRef(null);
+
+  const getMinFromY = y => {
+    const rect = gridRef.current.getBoundingClientRect();
+    const relY = y - rect.top + scrollRef.current.scrollTop;
+    const totalMin = Math.round((relY / CELL_H) * 60 / 30) * 30;
+    return Math.max(0, Math.min(23*60+30, totalMin));
+  };
+
+  const onMouseDown = e => {
+    if (e.target.closest('[data-res]')) return;
+    const min = getMinFromY(e.clientY);
+    setDrag({startMin: min, endMin: min + 60});
+  };
+  const onMouseMove = e => {
+    if (!drag) return;
+    const min = getMinFromY(e.clientY);
+    setDrag(d => ({...d, endMin: Math.max(d.startMin + 30, min + 30)}));
+  };
+  const onMouseUp = () => {
+    if (drag) {
+      onSlotClick({date: dateStr, startTime: minToTime(drag.startMin), endTime: minToTime(Math.min(drag.endMin, 24*60))});
+      setDrag(null);
+    }
+  };
+
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dow = new Date(y, m-1, d).getDay();
+  const isToday = dateStr === today();
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
+      {/* nav header */}
+      <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'12px 16px',borderBottom:`1px solid ${P.border}`,background:P.panel,flexShrink:0}}>
+        <button onClick={()=>onNavigate(-1)} style={{background:'#eef1f7',border:'none',borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'16px',color:P.muted}}>‹</button>
+        <div style={{textAlign:'center',flex:1}}>
+          <div style={{fontSize:'13px',color:P.muted}}>{WD[dow]}</div>
+          <div style={{fontSize:'24px',fontWeight:700,lineHeight:1.1,color:isToday?P.accent:P.text,background:isToday?P.accentL+'22':'none',borderRadius:'50%',width:'44px',height:'44px',display:'flex',alignItems:'center',justifyContent:'center',margin:'2px auto'}}>{d}</div>
+          <div style={{fontSize:'12px',color:P.dim}}>{y}年{m}月</div>
+        </div>
+        <button onClick={()=>onNavigate(1)} style={{background:'#eef1f7',border:'none',borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'16px',color:P.muted}}>›</button>
       </div>
-      <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"14px"}}>
-        {rooms.map(r=><div key={r} style={{display:"flex",alignItems:"center",gap:"6px"}}><span style={{width:"9px",height:"9px",borderRadius:"50%",background:rCol(rooms,r),display:"inline-block"}}/><span style={{fontSize:"12px",color:"#6b7280"}}>{r}</span></div>)}
+
+      {/* scrollable grid */}
+      <div ref={scrollRef} style={{overflowY:'auto',flex:1,position:'relative'}}>
+        <div ref={gridRef} style={{position:'relative',height:`${DAY_HOURS*CELL_H}px`,display:'flex',userSelect:'none'}}
+          onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
+
+          {/* hour labels */}
+          <div style={{width:'52px',flexShrink:0}}>
+            {HOURS.map(h => (
+              <div key={h} style={{height:`${CELL_H}px`,display:'flex',alignItems:'flex-start',justifyContent:'flex-end',paddingRight:'8px',paddingTop:'2px'}}>
+                <span style={{fontSize:'11px',color:P.dim}}>{pad(h)}:00</span>
+              </div>
+            ))}
+          </div>
+
+          {/* grid lines + events */}
+          <div style={{flex:1,position:'relative',borderLeft:`1px solid ${P.border}`}}>
+            {HOURS.map(h => (
+              <div key={h} style={{height:`${CELL_H}px`,borderBottom:`1px solid ${h%2===1?P.border+'88':P.border}`,boxSizing:'border-box'}}/>
+            ))}
+
+            {/* drag selection */}
+            {drag && (
+              <div style={{position:'absolute',left:'2px',right:'2px',top:`${(drag.startMin/60)*CELL_H}px`,height:`${((drag.endMin-drag.startMin)/60)*CELL_H}px`,background:P.accent+'33',border:`2px solid ${P.accent}`,borderRadius:'6px',pointerEvents:'none',zIndex:5}}>
+                <span style={{fontSize:'11px',color:P.accent,padding:'2px 6px',fontWeight:600}}>{minToTime(drag.startMin)}〜{minToTime(Math.min(drag.endMin,24*60))}</span>
+              </div>
+            )}
+
+            {/* reservations */}
+            {active.map(r => {
+              const startMin = timeToMin(r.startTime);
+              const endMin   = timeToMin(r.endTime);
+              const dur = Math.max(endMin - startMin, 30);
+              const rc = getRoomColor(rooms, r.room);
+              return (
+                <div key={r.id} data-res="1" onClick={e=>{e.stopPropagation();onResClick(r);}}
+                  style={{position:'absolute',left:'4px',right:'4px',top:`${(startMin/60)*CELL_H}px`,height:`${(dur/60)*CELL_H}px`,background:rc.bg,borderLeft:`3px solid ${rc.border}`,borderRadius:'5px',padding:'4px 7px',cursor:'pointer',overflow:'hidden',zIndex:10,boxShadow:'0 1px 4px rgba(44,58,80,0.1)'}}>
+                  <div style={{fontSize:'12px',fontWeight:700,color:rc.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.room}</div>
+                  <div style={{fontSize:'11px',color:rc.border,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.startTime}〜{r.endTime}　{r.name}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:"2px"}}>
-        {WD.map((w,i)=><div key={w} style={{textAlign:"center",padding:"8px 4px",fontSize:"11px",fontWeight:700,color:i===0?"#ff6b6b":i===6?"#5b8dee":"#9ca3af",letterSpacing:"0.1em"}}>{w}</div>)}
-        {Array(first).fill(null).map((_,i)=><div key={"e"+i}/>)}
-        {Array(days).fill(null).map((_,i)=>{
-          const d=i+1,ds=toDS(year,month,d),dr=getDR(d);
-          const isTd=ds===toDS(today.getFullYear(),today.getMonth(),today.getDate());
-          const dow=(first+i)%7;
-          return(
-            <div key={d} onClick={()=>onDayClick(ds,dr)} style={{minHeight:"68px",padding:"6px",borderRadius:"8px",cursor:"pointer",background:isTd?"#fff3f3":"#f8faff",border:isTd?"2px solid #ff6b6b":"1px solid #e0e8ff",transition:"background 0.12s"}} onMouseOver={e=>e.currentTarget.style.background=isTd?"#ffe8e8":"#f0f4ff"} onMouseOut={e=>e.currentTarget.style.background=isTd?"#fff3f3":C.panel}>
-              <span style={{fontSize:"12px",fontWeight:isTd?700:400,color:isTd?"#ff6b6b":dow===0?C.danger:dow===6?"#5b8dee":C.text}}>{d}</span>
-              <div style={{marginTop:"3px",display:"flex",flexDirection:"column",gap:"2px"}}>
-                {dr.slice(0,3).map(r=><div key={r.id} style={{fontSize:"10px",background:rCol(rooms,r.room)+"33",color:rCol(rooms,r.room),borderLeft:`2px solid ${rCol(rooms,r.room)}`,padding:"1px 4px",borderRadius:"2px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.room}</div>)}
-                {dr.length>3&&<div style={{fontSize:"9px",color:C.dim}}>+{dr.length-3}件</div>}
+    </div>
+  );
+};
+
+// ── Week View ─────────────────────────────────────────────
+const WeekView = ({startDate, reservations, rooms, onNavigate, onSlotClick, onResClick}) => {
+  const scrollRef = useRef(null);
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 8 * CELL_H; }, [startDate]);
+
+  const days = Array.from({length:7}, (_,i) => dsAdd(startDate, i));
+  const todayStr = today();
+
+  const getActive = ds => reservations.filter(r => r.status !== '取消' && r.startDate <= ds && r.endDate >= ds);
+
+  const [,sm,] = startDate.split('-');
+  const [,em,] = days[6].split('-');
+  const label = sm === em
+    ? `${startDate.split('-')[0]}年${+sm}月`
+    : `${startDate.split('-')[0]}年${+sm}月〜${+em}月`;
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
+      <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 14px',borderBottom:`1px solid ${P.border}`,background:P.panel,flexShrink:0}}>
+        <button onClick={()=>onNavigate(-7)} style={{background:'#eef1f7',border:'none',borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'16px',color:P.muted}}>‹</button>
+        <span style={{flex:1,textAlign:'center',fontWeight:700,fontSize:'15px',color:P.text}}>{label}</span>
+        <button onClick={()=>onNavigate(7)} style={{background:'#eef1f7',border:'none',borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'16px',color:P.muted}}>›</button>
+      </div>
+
+      {/* day headers */}
+      <div style={{display:'grid',gridTemplateColumns:'52px repeat(7,1fr)',background:P.panel,borderBottom:`1px solid ${P.border}`,flexShrink:0}}>
+        <div/>
+        {days.map((ds,i) => {
+          const [y,m,d] = ds.split('-').map(Number);
+          const isToday = ds === todayStr;
+          const dow = (new Date(y,m-1,d)).getDay();
+          return (
+            <div key={ds} style={{textAlign:'center',padding:'8px 4px',borderLeft:`1px solid ${P.border}`}}>
+              <div style={{fontSize:'11px',color:dow===0?P.danger:dow===6?P.accentL:P.muted}}>{WD[dow]}</div>
+              <div style={{fontSize:'16px',fontWeight:700,color:isToday?'#fff':dow===0?P.danger:dow===6?P.accentL:P.text,background:isToday?P.accent:'none',borderRadius:'50%',width:'30px',height:'30px',display:'flex',alignItems:'center',justifyContent:'center',margin:'2px auto'}}>{d}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div ref={scrollRef} style={{overflowY:'auto',flex:1}}>
+        <div style={{display:'grid',gridTemplateColumns:'52px repeat(7,1fr)',height:`${DAY_HOURS*CELL_H}px`,position:'relative'}}>
+          {/* hour labels */}
+          <div>
+            {HOURS.map(h => (
+              <div key={h} style={{height:`${CELL_H}px`,display:'flex',alignItems:'flex-start',justifyContent:'flex-end',paddingRight:'6px',paddingTop:'2px'}}>
+                <span style={{fontSize:'10px',color:P.dim}}>{pad(h)}:00</span>
+              </div>
+            ))}
+          </div>
+          {/* columns */}
+          {days.map((ds,ci) => (
+            <div key={ds} style={{borderLeft:`1px solid ${P.border}`,position:'relative',cursor:'pointer'}}
+              onClick={e=>{
+                if (e.target.closest('[data-res]')) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const relY = e.clientY - rect.top + scrollRef.current.scrollTop;
+                const min = Math.round((relY / CELL_H) * 60 / 30) * 30;
+                onSlotClick({date:ds, startTime:minToTime(min), endTime:minToTime(Math.min(min+60,24*60))});
+              }}>
+              {HOURS.map(h => <div key={h} style={{height:`${CELL_H}px`,borderBottom:`1px solid ${P.border}88`}}/>)}
+              {getActive(ds).map(r => {
+                const sm2 = timeToMin(r.startTime), em2 = timeToMin(r.endTime);
+                const rc = getRoomColor(rooms, r.room);
+                return (
+                  <div key={r.id} data-res="1" onClick={e=>{e.stopPropagation();onResClick(r);}}
+                    style={{position:'absolute',left:'2px',right:'2px',top:`${(sm2/60)*CELL_H}px`,height:`${(Math.max(em2-sm2,30)/60)*CELL_H}px`,background:rc.bg,borderLeft:`3px solid ${rc.border}`,borderRadius:'4px',padding:'2px 5px',cursor:'pointer',overflow:'hidden',zIndex:10,boxShadow:'0 1px 3px rgba(44,58,80,0.1)'}}>
+                    <div style={{fontSize:'10px',fontWeight:700,color:rc.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.room}</div>
+                    <div style={{fontSize:'10px',color:rc.border,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.startTime}〜{r.endTime}</div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Month View ────────────────────────────────────────────
+const MonthView = ({year, month, reservations, rooms, onNavigate, onDayClick}) => {
+  const days = getDIM(year, month);
+  const first = getFD(year, month);
+  const todayStr = today();
+  const active = reservations.filter(r => r.status !== '取消');
+
+  const getResForDay = d => {
+    const ds = toDS(year, month, d);
+    return active.filter(r => r.startDate <= ds && r.endDate >= ds);
+  };
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
+      <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 14px',borderBottom:`1px solid ${P.border}`,background:P.panel,flexShrink:0}}>
+        <button onClick={()=>onNavigate(-1)} style={{background:'#eef1f7',border:'none',borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'16px',color:P.muted}}>‹</button>
+        <span style={{flex:1,textAlign:'center',fontWeight:700,fontSize:'15px',color:P.text}}>{year}年 {month+1}月</span>
+        <button onClick={()=>onNavigate(1)} style={{background:'#eef1f7',border:'none',borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'16px',color:P.muted}}>›</button>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',background:P.panel,borderBottom:`1px solid ${P.border}`,flexShrink:0}}>
+        {WD.map((w,i) => <div key={w} style={{textAlign:'center',padding:'8px 0',fontSize:'11px',fontWeight:700,color:i===0?P.danger:i===6?P.accentL:P.muted,letterSpacing:'0.08em'}}>{w}</div>)}
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',flex:1,overflow:'auto'}}>
+        {Array(first).fill(null).map((_,i) => <div key={'e'+i} style={{borderRight:`1px solid ${P.border}`,borderBottom:`1px solid ${P.border}`}}/>)}
+        {Array(days).fill(null).map((_,i) => {
+          const d = i+1, ds = toDS(year, month, d);
+          const dr = getResForDay(d);
+          const isToday = ds === todayStr;
+          const dow = (first+i) % 7;
+          return (
+            <div key={d} onClick={() => onDayClick(ds)} style={{borderRight:`1px solid ${P.border}`,borderBottom:`1px solid ${P.border}`,minHeight:'80px',padding:'5px',cursor:'pointer',background:isToday?P.accent+'11':'#fff',transition:'background 0.1s'}}
+              onMouseOver={e=>e.currentTarget.style.background=isToday?P.accent+'22':'#f4f7ff'}
+              onMouseOut={e=>e.currentTarget.style.background=isToday?P.accent+'11':'#fff'}>
+              <span style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:'24px',height:'24px',fontSize:'13px',fontWeight:isToday?700:400,color:isToday?'#fff':dow===0?P.danger:dow===6?P.accentL:P.text,background:isToday?P.accent:'none',borderRadius:'50%'}}>{d}</span>
+              <div style={{marginTop:'2px',display:'flex',flexDirection:'column',gap:'2px'}}>
+                {dr.slice(0,3).map(r => {
+                  const rc = getRoomColor(rooms, r.room);
+                  return <div key={r.id} style={{fontSize:'10px',background:rc.bg,color:rc.text,borderLeft:`2px solid ${rc.border}`,padding:'1px 4px',borderRadius:'2px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.room}</div>;
+                })}
+                {dr.length>3 && <div style={{fontSize:'9px',color:P.dim}}>+{dr.length-3}件</div>}
               </div>
             </div>
           );
@@ -215,47 +462,59 @@ const CalView=({reservations,rooms,onDayClick})=>{
   );
 };
 
-const DayDtl=({dateStr,resForDay,rooms,onClose,onEdit,onCancel})=>(
-  <Modal title={`${fmtD(dateStr)} の予約`} onClose={onClose}>
-    {resForDay.length===0?<p style={{color:"#bbb",textAlign:"center",padding:"16px 0"}}>この日の予約はありません</p>
-    :resForDay.map(r=>(
-      <div key={r.id} style={{background:"#f8faff",border:"1px solid #e0e8ff",borderRadius:"12px",padding:"14px",marginBottom:"10px"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
-          <span style={{fontWeight:700,color:rCol(rooms,r.room),fontSize:"15px"}}>{r.room}</span>
-          <span style={{fontSize:"12px",color:"#ff6b6b"}}>{r.startTime}〜{r.endTime}</span>
+// ── Res detail popup ──────────────────────────────────────
+const ResDetail = ({res, rooms, onClose, onEdit, onCancel}) => {
+  const rc = getRoomColor(rooms, res.room);
+  return (
+    <Modal title="予約の詳細" onClose={onClose}>
+      <div style={{background:rc.bg,borderLeft:`4px solid ${rc.border}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
+        <div style={{fontWeight:700,fontSize:'16px',color:rc.text,marginBottom:'4px'}}>{res.room}</div>
+        <div style={{fontSize:'13px',color:rc.border}}>{fmtD(res.startDate)}{res.startDate!==res.endDate?`〜${fmtD(res.endDate)}`:''} {res.startTime}〜{res.endTime}</div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'6px 12px',fontSize:'13px',color:P.muted,marginBottom:'16px'}}>
+        <span>👤</span><span style={{color:P.text}}>{res.name}</span>
+        <span>📞</span><span style={{color:P.text}}>{res.contact}</span>
+        <span>📋</span><span style={{color:P.text}}>{res.purpose}</span>
+        <span>👥</span><span style={{color:P.text}}>{res.people}人</span>
+        <span>📌</span><span><span style={{padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:700,color:sColor(res.status),border:`1px solid ${sColor(res.status)}44`,background:sColor(res.status)+'11'}}>{res.status}</span></span>
+      </div>
+      {res.status !== '取消' && (
+        <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
+          <Btn variant="ghost" onClick={onClose}>閉じる</Btn>
+          <Btn variant="soft" onClick={()=>onEdit(res)}>編集</Btn>
+          <Btn variant="danger" onClick={()=>onCancel(res)}>取消</Btn>
         </div>
-        <div style={{fontSize:"13px",color:"#6b7280",lineHeight:"1.9"}}>👤 {r.name}　📞 {r.contact}<br/>📋 {r.purpose}　👥 {r.people}人</div>
-        {r.status!=="取消"&&<div style={{display:"flex",gap:"8px",marginTop:"10px"}}><Btn variant="ghost" size="sm" onClick={()=>onEdit(r)}>編集</Btn><Btn variant="danger" size="sm" onClick={()=>onCancel(r)}>取消</Btn></div>}
-      </div>
-    ))}
-  </Modal>
-);
+      )}
+    </Modal>
+  );
+};
 
-const HistView=({reservations,rooms,onEdit,onCancel})=>{
-  const [fr,setFr]=useState("すべて"),[fs,setFs]=useState("すべて"),[q,setQ]=useState("");
-  const filt=reservations.filter(r=>(fr==="すべて"||r.room===fr)&&(fs==="すべて"||r.status===fs)&&(r.name.includes(q)||r.purpose.includes(q)||r.room.includes(q))).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
-  return(
-    <div>
-      <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"16px"}}>
-        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 名前・用途で検索" style={{...IS,flex:1,minWidth:"140px"}}/>
-        <select value={fr} onChange={e=>setFr(e.target.value)} style={{...IS,width:"auto"}}><option>すべて</option>{rooms.map(r=><option key={r}>{r}</option>)}</select>
-        <select value={fs} onChange={e=>setFs(e.target.value)} style={{...IS,width:"auto"}}>{["すべて","申請中","確認済","取消"].map(s=><option key={s}>{s}</option>)}</select>
+// ── History ───────────────────────────────────────────────
+const HistView = ({reservations, rooms, onEdit, onCancel}) => {
+  const [fr,setFr]=useState('すべて'),[fs,setFs]=useState('すべて'),[q,setQ]=useState('');
+  const filt = reservations.filter(r=>(fr==='すべて'||r.room===fr)&&(fs==='すべて'||r.status===fs)&&(r.name.includes(q)||r.purpose.includes(q)||r.room.includes(q))).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  return (
+    <div style={{padding:'20px'}}>
+      <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'14px'}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 名前・用途で検索" style={{...IS,flex:1,minWidth:'140px'}}/>
+        <select value={fr} onChange={e=>setFr(e.target.value)} style={{...IS,width:'auto'}}><option>すべて</option>{rooms.map(r=><option key={r}>{r}</option>)}</select>
+        <select value={fs} onChange={e=>setFs(e.target.value)} style={{...IS,width:'auto'}}>{['すべて','申請中','確認済','取消'].map(s=><option key={s}>{s}</option>)}</select>
       </div>
-      <div style={{overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:"13px"}}>
-          <thead><tr>{["会議室","申請者","用途","人数","期間","時間","ステータス","操作"].map(h=><th key={h} style={{padding:"10px 12px",textAlign:"left",color:"#7c6bdb",fontSize:"11px",letterSpacing:"0.1em",borderBottom:"2px solid #e8ecff",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+      <div style={{overflowX:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:'13px'}}>
+          <thead><tr>{['会議室','申請者','用途','人数','期間','時間','状態','操作'].map(h=><th key={h} style={{padding:'9px 11px',textAlign:'left',color:P.muted,fontSize:'11px',letterSpacing:'0.08em',borderBottom:`2px solid ${P.border}`,whiteSpace:'nowrap'}}>{h}</th>)}</tr></thead>
           <tbody>
-            {filt.length===0&&<tr><td colSpan={8} style={{padding:"32px",textAlign:"center",color:"#bbb"}}>申請はありません</td></tr>}
-            {filt.map(r=>(
-              <tr key={r.id} style={{borderBottom:"1px solid #eef0ff"}} onMouseOver={e=>e.currentTarget.style.background="#f5f0ff"} onMouseOut={e=>e.currentTarget.style.background=""}>
-                <td style={{padding:"10px 12px",color:"#7c6bdb",whiteSpace:"nowrap"}}>{r.room}</td>
-                <td style={{padding:"10px 12px",color:"#1a1a2e"}}>{r.name}</td>
-                <td style={{padding:"10px 12px",color:"#6b7280",maxWidth:"120px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.purpose}</td>
-                <td style={{padding:"10px 12px",color:"#6b7280",textAlign:"center"}}>{r.people}人</td>
-                <td style={{padding:"10px 12px",color:"#6b7280",whiteSpace:"nowrap",fontSize:"12px"}}>{r.startDate===r.endDate?fmtD(r.startDate):`${fmtD(r.startDate)}〜${fmtD(r.endDate)}`}</td>
-                <td style={{padding:"10px 12px",color:C.muted,whiteSpace:"nowrap",fontSize:"12px"}}>{r.startTime}〜{r.endTime}</td>
-                <td style={{padding:"10px 12px"}}><span style={{padding:"2px 10px",borderRadius:"20px",fontSize:"11px",fontWeight:700,color:sCol(r.status),border:`1px solid ${sCol(r.status)}33`,background:`${sCol(r.status)}11`}}>{r.status}</span></td>
-                <td style={{padding:"10px 12px"}}>{r.status!=="取消"&&<div style={{display:"flex",gap:"6px"}}><Btn variant="ghost" size="sm" onClick={()=>onEdit(r)}>編集</Btn><Btn variant="danger" size="sm" onClick={()=>onCancel(r)}>取消</Btn></div>}</td>
+            {filt.length===0 && <tr><td colSpan={8} style={{padding:'32px',textAlign:'center',color:P.dim}}>申請はありません</td></tr>}
+            {filt.map(r => (
+              <tr key={r.id} style={{borderBottom:`1px solid ${P.border}`}} onMouseOver={e=>e.currentTarget.style.background='#f4f7ff'} onMouseOut={e=>e.currentTarget.style.background=''}>
+                <td style={{padding:'9px 11px',color:P.accent,whiteSpace:'nowrap',fontWeight:600}}>{r.room}</td>
+                <td style={{padding:'9px 11px',color:P.text}}>{r.name}</td>
+                <td style={{padding:'9px 11px',color:P.muted,maxWidth:'120px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.purpose}</td>
+                <td style={{padding:'9px 11px',color:P.muted,textAlign:'center'}}>{r.people}人</td>
+                <td style={{padding:'9px 11px',color:P.muted,whiteSpace:'nowrap',fontSize:'12px'}}>{r.startDate===r.endDate?fmtD(r.startDate):`${fmtShort(r.startDate)}〜${fmtShort(r.endDate)}`}</td>
+                <td style={{padding:'9px 11px',color:P.muted,whiteSpace:'nowrap',fontSize:'12px'}}>{r.startTime}〜{r.endTime}</td>
+                <td style={{padding:'9px 11px'}}><span style={{padding:'2px 9px',borderRadius:'20px',fontSize:'11px',fontWeight:700,color:sColor(r.status),border:`1px solid ${sColor(r.status)}44`,background:sColor(r.status)+'11'}}>{r.status}</span></td>
+                <td style={{padding:'9px 11px'}}>{r.status!=='取消'&&<div style={{display:'flex',gap:'5px'}}><Btn variant="soft" size="sm" onClick={()=>onEdit(r)}>編集</Btn><Btn variant="danger" size="sm" onClick={()=>onCancel(r)}>取消</Btn></div>}</td>
               </tr>
             ))}
           </tbody>
@@ -265,131 +524,180 @@ const HistView=({reservations,rooms,onEdit,onCancel})=>{
   );
 };
 
-const RoomMgr=({rooms,onAdd,onRemove,loading})=>{
-  const [nr,setNr]=useState("");
-  const add=()=>{ const r=nr.trim(); if(r&&!rooms.includes(r)){onAdd(r);setNr("");} };
-  return(
-    <div>
-      <div style={{display:"flex",gap:"8px",marginBottom:"16px"}}>
-        <input value={nr} onChange={e=>setNr(e.target.value)}  placeholder="会議室名を入力" style={{...IS,flex:1}}/>
+// ── Room manager ──────────────────────────────────────────
+const RoomMgr = ({rooms, onAdd, onRemove, loading}) => {
+  const [nr, setNr] = useState('');
+  const add = () => { const r=nr.trim(); if(r&&!rooms.includes(r)){onAdd(r);setNr('');} };
+  return (
+    <div style={{padding:'20px'}}>
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+        <input value={nr} onChange={e=>setNr(e.target.value)} placeholder="会議室名を入力" style={{...IS,flex:1}}/>
         <Btn onClick={add} disabled={loading}>追加</Btn>
       </div>
-      <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
-        {rooms.map(r=>(
-          <div key={r} style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:"#f8faff",border:"1px solid #e0e8ff",borderRadius:"10px",padding:"12px 16px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
-              <span style={{width:"10px",height:"10px",borderRadius:"50%",background:rCol(rooms,r),display:"inline-block"}}/>
-              <span style={{color:"#1a1a2e",fontSize:"14px"}}>{r}</span>
+      <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+        {rooms.map(r => {
+          const rc = getRoomColor(rooms, r);
+          return (
+            <div key={r} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'#f8faff',border:`1px solid ${P.border}`,borderRadius:'10px',padding:'11px 15px'}}>
+              <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                <span style={{width:'10px',height:'10px',borderRadius:'50%',background:rc.border,display:'inline-block'}}/>
+                <span style={{color:P.text,fontSize:'14px'}}>{r}</span>
+              </div>
+              <Btn variant="danger" size="sm" onClick={()=>onRemove(r)} disabled={rooms.length<=1}>削除</Btn>
             </div>
-            <Btn variant="danger" size="sm" onClick={()=>onRemove(r)} disabled={rooms.length<=1}>削除</Btn>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
 };
 
+// ── Main App ──────────────────────────────────────────────
 function App() {
-  const [ready,setReady]=useState(false);
-  const [fireErr,setFireErr]=useState(null);
-  const [reservations,setReservations]=useState([]);
-  const [rooms,setRooms]=useState(defaultRooms);
-  const [tab,setTab]=useState("calendar");
-  const [busy,setBusy]=useState(false);
-  const [showForm,setShowForm]=useState(false);
-  const [editTarget,setEditTarget]=useState(null);
-  const [cancelTarget,setCancelTarget]=useState(null);
-  const [pwTarget,setPwTarget]=useState(null);
-  const [pwAction,setPwAction]=useState(null);
-  const [dayDetail,setDayDetail]=useState(null);
+  const [ready,setReady]       = useState(false);
+  const [fireErr,setFireErr]   = useState(null);
+  const [reservations,setRes]  = useState([]);
+  const [rooms,setRooms]       = useState(['第1会議室','第2会議室','大ホール']);
+  const [viewMode,setViewMode] = useState('month'); // 'day' | 'week' | 'month'
+  const [busy,setBusy]         = useState(false);
 
-  useEffect(()=>{
+  // date cursors
+  const [dayDate,setDayDate]   = useState(today());
+  const [weekStart,setWeekStart] = useState(() => { const d=new Date(); d.setDate(d.getDate()-d.getDay()); return d.toISOString().slice(0,10); });
+  const [calYear,setCalYear]   = useState(new Date().getFullYear());
+  const [calMonth,setCalMonth] = useState(new Date().getMonth());
+
+  // modals
+  const [showForm,setShowForm]   = useState(false);
+  const [formPrefill,setFormPrefill] = useState(null);
+  const [editTarget,setEditTarget] = useState(null);
+  const [cancelTarget,setCancelTarget] = useState(null);
+  const [pwTarget,setPwTarget]   = useState(null);
+  const [pwAction,setPwAction]   = useState(null);
+  const [detailRes,setDetailRes] = useState(null);
+
+  useEffect(() => {
     let u1,u2;
     try {
-      u1=onSnap("meeting_rooms",docs=>{ if(docs.length>0) setRooms(docs.map(d=>d.name).filter(Boolean)); });
-      u2=onSnap("meeting_reservations",docs=>{ setReservations(docs); setReady(true); });
-    } catch(e) {
-      setFireErr("Firebase接続エラー: "+e.message);
-      setReady(true);
-    }
-    return ()=>{ u1&&u1(); u2&&u2(); };
-  },[]);
+      u1 = onSnap('meeting_rooms', docs => { if(docs.length>0) setRooms(docs.map(d=>d.name).filter(Boolean)); });
+      u2 = onSnap('meeting_reservations', docs => { setRes(docs); setReady(true); });
+    } catch(e) { setFireErr('Firebase接続エラー: '+e.message); setReady(true); }
+    return () => { u1&&u1(); u2&&u2(); };
+  }, []);
 
-  const addRoom=async(name)=>{ setBusy(true); try{ await addD("meeting_rooms",{name}); }catch(e){alert(e.message);} finally{setBusy(false);} };
-  const removeRoom=async(name)=>{ setBusy(true); try{ const docs=await getDs("meeting_rooms"); const t=docs.find(d=>d.name===name); if(t) await delD("meeting_rooms",t.id); }catch(e){alert(e.message);} finally{setBusy(false);} };
-  const addRes=async(form)=>{ setBusy(true); try{ const now=new Date().toISOString(); await addD("meeting_reservations",{...form,status:"申請中",createdAt:now,updatedAt:now}); setShowForm(false); }catch(e){alert(e.message);} finally{setBusy(false);} };
-  const updateRes=async(form)=>{ setBusy(true); try{ await updD("meeting_reservations",editTarget.id,{...form,updatedAt:new Date().toISOString()}); setEditTarget(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
-  const cancelRes=async()=>{ setBusy(true); try{ await updD("meeting_reservations",cancelTarget.id,{status:"取消",updatedAt:new Date().toISOString()}); setCancelTarget(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
-  const reqEdit=(r)=>{ setDayDetail(null); setPwTarget(r); setPwAction("edit"); };
-  const reqCancel=(r)=>{ setDayDetail(null); setPwTarget(r); setPwAction("cancel"); };
-  const pwConfirm=()=>{ if(pwAction==="edit") setEditTarget(pwTarget); if(pwAction==="cancel") setCancelTarget(pwTarget); setPwTarget(null); setPwAction(null); };
+  const addRoom    = async n => { setBusy(true); try{ await addD('meeting_rooms',{name:n}); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const removeRoom = async n => { setBusy(true); try{ const docs=await getDs('meeting_rooms'); const t=docs.find(d=>d.name===n); if(t) await delD('meeting_rooms',t.id); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const addRes     = async form => { setBusy(true); try{ const now=new Date().toISOString(); await addD('meeting_reservations',{...form,status:'申請中',createdAt:now,updatedAt:now}); setShowForm(false);setFormPrefill(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const updateRes  = async form => { setBusy(true); try{ await updD('meeting_reservations',editTarget.id,{...form,updatedAt:new Date().toISOString()}); setEditTarget(null);setDetailRes(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const cancelRes  = async ()  => { setBusy(true); try{ await updD('meeting_reservations',cancelTarget.id,{status:'取消',updatedAt:new Date().toISOString()}); setCancelTarget(null);setDetailRes(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
 
-  const TABS=[{id:"calendar",label:"📅 カレンダー"},{id:"history",label:"📋 履歴"},{id:"rooms",label:"🏢 会議室管理"}];
+  const reqEdit   = r => { setDetailRes(null); setPwTarget(r); setPwAction('edit'); };
+  const reqCancel = r => { setDetailRes(null); setPwTarget(r); setPwAction('cancel'); };
+  const pwConfirm = () => {
+    if(pwAction==='edit') setEditTarget(pwTarget);
+    if(pwAction==='cancel') setCancelTarget(pwTarget);
+    setPwTarget(null); setPwAction(null);
+  };
 
-  return(
-    <div style={{minHeight:"100vh",background:C.bg}}>
-      <div style={{background:"linear-gradient(135deg,#ff6b6b,#ee5a24)",borderBottom:"none",padding:"0 24px",position:"sticky",top:0,zIndex:100,boxShadow:"0 8px 32px rgba(255,107,107,0.25)"}}>
-        <div style={{maxWidth:"980px",margin:"0 auto",display:"flex",alignItems:"center",gap:"12px",padding:"14px 0",flexWrap:"wrap"}}>
+  const handleSlotClick = ({date, startTime, endTime}) => {
+    setFormPrefill({date, startTime, endTime});
+    setShowForm(true);
+  };
+
+  const handleDayNav = delta => setDayDate(ds => dsAdd(ds, delta));
+  const handleWeekNav = delta => setWeekStart(ds => dsAdd(ds, delta));
+  const handleMonthNav = delta => {
+    setCalMonth(m => { let nm=m+delta; if(nm<0){setCalYear(y=>y-1);return 11;} if(nm>11){setCalYear(y=>y+1);return 0;} return nm; });
+  };
+
+  const handleMonthDayClick = ds => { setDayDate(ds); setViewMode('day'); };
+  const handleResClick = r => setDetailRes(r);
+
+  const TABS = [{id:'calendar',label:'📅 カレンダー'},{id:'history',label:'📋 履歴'},{id:'rooms',label:'🏢 会議室管理'}];
+  const [mainTab, setMainTab] = useState('calendar');
+
+  const activeCount = reservations.filter(r=>r.status==='申請中').length;
+
+  return (
+    <div style={{minHeight:'100vh',background:P.bg,display:'flex',flexDirection:'column'}}>
+      {/* Header */}
+      <div style={{background:P.header,padding:'0 20px',position:'sticky',top:0,zIndex:100,boxShadow:'0 2px 12px rgba(44,58,80,0.25)'}}>
+        <div style={{maxWidth:'1200px',margin:'0 auto',display:'flex',alignItems:'center',gap:'12px',padding:'12px 0',flexWrap:'wrap'}}>
           <div>
-            <div style={{fontSize:"17px",fontWeight:800,letterSpacing:"0.05em",color:"#fff",WebkitTextFillColor:"#fff"}}>会議室予約システム</div>
-            <div style={{fontSize:"10px",color:"rgba(255,255,255,0.75)",letterSpacing:"0.15em"}}>MEETING ROOM RESERVATION · リアルタイム同期</div>
+            <div style={{fontSize:'16px',fontWeight:800,color:'#fff',letterSpacing:'0.04em'}}>🏢 会議室予約システム</div>
+            <div style={{fontSize:'10px',color:'rgba(255,255,255,0.55)',letterSpacing:'0.12em'}}>MEETING ROOM RESERVATION</div>
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:"6px",marginLeft:"8px"}}>
-            <span style={{width:"7px",height:"7px",borderRadius:"50%",background:"rgba(255,255,255,0.9)",display:"inline-block",animation:"pulse 2s infinite"}}/>
-            <span style={{fontSize:"11px",color:"#fff"}}>{ready?"LIVE":"接続中"}</span>
+          <div style={{display:'flex',alignItems:'center',gap:'5px',marginLeft:'6px'}}>
+            <span style={{width:'7px',height:'7px',borderRadius:'50%',background:ready?'#7de8c0':'#aaa',display:'inline-block',animation:'pulse 2s infinite'}}/>
+            <span style={{fontSize:'11px',color:ready?'#7de8c0':'#aaa'}}>{ready?'LIVE':'接続中'}</span>
           </div>
-          <div style={{marginLeft:"auto",display:"flex",gap:"8px",flexWrap:"wrap"}}>
-            <Btn onClick={()=>setShowForm(true)}>＋ 新規申請</Btn>
-            <Btn variant="ghost" size="sm" onClick={()=>exportCSV(reservations)}>CSV出力</Btn>
+
+          {mainTab==='calendar' && (
+            <div style={{display:'flex',gap:'4px',marginLeft:'16px',background:'rgba(255,255,255,0.12)',borderRadius:'8px',padding:'3px'}}>
+              {[{id:'month',label:'月'},{id:'week',label:'週'},{id:'day',label:'日'}].map(v=>(
+                <button key={v.id} onClick={()=>setViewMode(v.id)} style={{padding:'4px 12px',borderRadius:'6px',border:'none',fontFamily:'inherit',fontSize:'12px',fontWeight:700,cursor:'pointer',background:viewMode===v.id?'#fff':'transparent',color:viewMode===v.id?P.header:'rgba(255,255,255,0.75)',transition:'all 0.15s'}}>{v.label}</button>
+              ))}
+            </div>
+          )}
+
+          <div style={{marginLeft:'auto',display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
+            {activeCount>0 && <span style={{background:'#e8a87c',color:'#fff',borderRadius:'20px',padding:'3px 10px',fontSize:'12px',fontWeight:700}}>申請中 {activeCount}件</span>}
+            <Btn onClick={()=>{setFormPrefill(null);setShowForm(true);}}>＋ 新規申請</Btn>
+            <Btn variant="ghost" size="sm" style={{color:'rgba(255,255,255,0.75)',border:'1px solid rgba(255,255,255,0.3)'}} onClick={()=>exportCSV(reservations)}>CSV</Btn>
           </div>
         </div>
-        <div style={{display:"flex",maxWidth:"980px",margin:"0 auto"}}>
-          {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{background:"none",border:"none",color:tab===t.id?"#fff":"rgba(255,255,255,0.65)",padding:"10px 16px",cursor:"pointer",fontFamily:"inherit",fontSize:"13px",fontWeight:700,borderBottom:tab===t.id?"2px solid rgba(255,255,255,0.9)":"2px solid transparent",letterSpacing:"0.05em"}}>{t.label}</button>)}
+        <div style={{display:'flex',maxWidth:'1200px',margin:'0 auto'}}>
+          {TABS.map(t=>(
+            <button key={t.id} onClick={()=>setMainTab(t.id)} style={{background:'none',border:'none',color:mainTab===t.id?'#fff':'rgba(255,255,255,0.55)',padding:'9px 16px',cursor:'pointer',fontFamily:'inherit',fontSize:'13px',fontWeight:700,borderBottom:mainTab===t.id?'2px solid #fff':'2px solid transparent',letterSpacing:'0.04em'}}>
+              {t.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      <div style={{maxWidth:"980px",margin:"0 auto",padding:"24px 16px"}}>
-        {!ready?<Spinner/>:fireErr?(
-          <div style={{background:"#2a1010",border:`1px solid ${C.danger}`,borderRadius:"12px",padding:"24px",color:C.danger}}>{fireErr}</div>
-        ):(
-          <>
-            {tab==="calendar"&&(
-              <div style={{display:"flex",gap:"10px",flexWrap:"wrap",marginBottom:"20px"}}>
-                {[{label:"総申請数",val:reservations.length,color:C.accent},{label:"申請中",val:reservations.filter(r=>r.status==="申請中").length,color:C.al},{label:"取消済",val:reservations.filter(r=>r.status==="取消").length,color:C.danger}].map(c=>(
-                  <div key={c.label} style={{background:"#fff",border:`2px solid ${c.color}55`,borderRadius:"12px",boxShadow:`0 2px 12px ${c.color}22`,padding:"10px 18px",display:"flex",gap:"8px",alignItems:"baseline"}}>
-                    <span style={{fontSize:"20px",fontWeight:800,color:c.color}}>{c.val}</span>
-                    <span style={{fontSize:"12px",color:"#9ca3af"}}>{c.label}</span>
-                  </div>
-                ))}
-              </div>
+      {/* Main */}
+      <div style={{flex:1,maxWidth:'1200px',width:'100%',margin:'0 auto',padding:'16px',display:'flex',flexDirection:'column',minHeight:0}}>
+        {!ready ? <Spinner/> : fireErr ? (
+          <div style={{background:'#fce8ee',border:`1px solid ${P.danger}`,borderRadius:'12px',padding:'20px',color:P.danger}}>{fireErr}</div>
+        ) : (
+          <div style={{background:P.panel,borderRadius:'16px',boxShadow:'0 2px 16px rgba(44,58,80,0.08)',border:`1px solid ${P.border}`,overflow:'hidden',flex:1,display:'flex',flexDirection:'column',minHeight:'600px'}}>
+            {mainTab==='calendar' && viewMode==='day' && (
+              <DayView dateStr={dayDate} reservations={reservations} rooms={rooms}
+                onNavigate={d=>handleDayNav(d)} onSlotClick={handleSlotClick} onResClick={handleResClick}/>
             )}
-            <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:"20px",padding:"24px",boxShadow:"0 4px 24px rgba(100,120,255,0.08)"}}>
-              {tab==="calendar"&&<CalView reservations={reservations} rooms={rooms} onDayClick={(d,r)=>setDayDetail({dateStr:d,resForDay:r})}/>}
-              {tab==="history"&&<HistView reservations={reservations} rooms={rooms} onEdit={reqEdit} onCancel={reqCancel}/>}
-              {tab==="rooms"&&<RoomMgr rooms={rooms} onAdd={addRoom} onRemove={removeRoom} loading={busy}/>}
-            </div>
-          </>
+            {mainTab==='calendar' && viewMode==='week' && (
+              <WeekView startDate={weekStart} reservations={reservations} rooms={rooms}
+                onNavigate={d=>handleWeekNav(d)} onSlotClick={handleSlotClick} onResClick={handleResClick}/>
+            )}
+            {mainTab==='calendar' && viewMode==='month' && (
+              <MonthView year={calYear} month={calMonth} reservations={reservations} rooms={rooms}
+                onNavigate={d=>handleMonthNav(d)} onDayClick={handleMonthDayClick}/>
+            )}
+            {mainTab==='history' && <HistView reservations={reservations} rooms={rooms} onEdit={reqEdit} onCancel={reqCancel}/>}
+            {mainTab==='rooms'   && <RoomMgr rooms={rooms} onAdd={addRoom} onRemove={removeRoom} loading={busy}/>}
+          </div>
         )}
       </div>
 
-      {showForm&&<ResForm rooms={rooms} onSubmit={addRes} onClose={()=>setShowForm(false)} loading={busy}/>}
-      {editTarget&&<ResForm rooms={rooms} initial={editTarget} onSubmit={updateRes} onClose={()=>setEditTarget(null)} loading={busy}/>}
-      {cancelTarget&&(
+      {/* Modals */}
+      {showForm && <ResForm rooms={rooms} onSubmit={addRes} onClose={()=>{setShowForm(false);setFormPrefill(null);}} loading={busy} prefill={formPrefill}/>}
+      {editTarget && <ResForm rooms={rooms} initial={editTarget} onSubmit={updateRes} onClose={()=>setEditTarget(null)} loading={busy}/>}
+      {detailRes && <ResDetail res={detailRes} rooms={rooms} onClose={()=>setDetailRes(null)} onEdit={reqEdit} onCancel={reqCancel}/>}
+      {cancelTarget && (
         <Modal title="申請を取り消しますか？" onClose={()=>setCancelTarget(null)}>
-          <p style={{color:"#6b7280",fontSize:"13px"}}><strong style={{color:C.text}}>{cancelTarget.name}</strong> さんの <strong style={{color:C.text}}>「{cancelTarget.room}」</strong> の申請を取り消します。この操作は元に戻せません。</p>
-          <div style={{display:"flex",gap:"8px",justifyContent:"flex-end",marginTop:"16px"}}>
+          <p style={{color:P.muted,fontSize:'13px'}}><strong style={{color:P.text}}>{cancelTarget.name}</strong> さんの <strong style={{color:P.text}}>「{cancelTarget.room}」</strong> の申請を取り消します。この操作は元に戻せません。</p>
+          <div style={{display:'flex',gap:'8px',justifyContent:'flex-end',marginTop:'14px'}}>
             <Btn variant="ghost" onClick={()=>setCancelTarget(null)}>やめる</Btn>
-            <Btn variant="danger" onClick={cancelRes} disabled={busy}>{busy?"処理中…":"取り消す"}</Btn>
+            <Btn variant="danger" onClick={cancelRes} disabled={busy}>{busy?'処理中…':'取り消す'}</Btn>
           </div>
         </Modal>
       )}
-      {pwTarget&&<PwDialog storedHash={pwTarget.passwordHash} onConfirm={pwConfirm} onCancel={()=>{setPwTarget(null);setPwAction(null);}}/>}
-      {dayDetail&&<DayDtl dateStr={dayDetail.dateStr} resForDay={dayDetail.resForDay} rooms={rooms} onClose={()=>setDayDetail(null)} onEdit={reqEdit} onCancel={reqCancel}/>}
+      {pwTarget && <PwDialog storedHash={pwTarget.passwordHash} onConfirm={pwConfirm} onCancel={()=>{setPwTarget(null);setPwAction(null);}}/>}
     </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
 </html>
