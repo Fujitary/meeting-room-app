@@ -39,6 +39,21 @@ const updD    = (col, id, data) => db.collection(col).doc(id).update(data);
 const delD    = (col, id)       => db.collection(col).doc(id).delete();
 const getDs   = (col)           => db.collection(col).get().then(s => s.docs.map(d => ({ id: d.id, ...d.data() })));
 const onSnap  = (col, cb)       => db.collection(col).onSnapshot(s => cb(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+// ── GAS Mail API ──────────────────────────────────────────
+// GASデプロイ後にURLをここに貼り付け
+let GAS_URL = "";
+
+const sendMailViaGAS = async (action, reservation, recipients) => {
+  if (!GAS_URL) return; // URL未設定なら無視
+  try {
+    await fetch(GAS_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, reservation, recipients })
+    });
+  } catch(e) { console.warn("メール送信エラー:", e); }
+};
 </script>
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
@@ -227,107 +242,179 @@ const ResForm = ({rooms, onSubmit, onClose, initial=null, loading, prefill=null}
   );
 };
 
-// ── Day View (Google Calendar style) ─────────────────────
-const CELL_H = 56; // px per hour
-const DAY_START = 0;
+// ── Day View (Google Calendar style, touch-friendly) ──────
+const CELL_H = 64; // px per hour — larger for touch
 const DAY_HOURS = 24;
 
 const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResClick}) => {
   const active = reservations.filter(r => r.status !== '取消' && r.startDate <= dateStr && r.endDate >= dateStr);
   const scrollRef = useRef(null);
+  const gridRef   = useRef(null);
+  const [drag, setDrag] = useState(null);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 8 * CELL_H;
   }, [dateStr]);
 
-  // drag-to-select state
-  const [drag, setDrag] = useState(null);
-  const gridRef = useRef(null);
-
-  const getMinFromY = y => {
+  const yToMin = (clientY) => {
+    if (!gridRef.current || !scrollRef.current) return 0;
     const rect = gridRef.current.getBoundingClientRect();
-    const relY = y - rect.top + scrollRef.current.scrollTop;
-    const totalMin = Math.round((relY / CELL_H) * 60 / 30) * 30;
-    return Math.max(0, Math.min(23*60+30, totalMin));
+    const relY  = clientY - rect.top + scrollRef.current.scrollTop;
+    const raw   = (relY / CELL_H) * 60;
+    return Math.max(0, Math.min(23 * 60 + 30, Math.round(raw / 30) * 30));
   };
 
+  // Mouse
   const onMouseDown = e => {
-    if (e.target.closest('[data-res]')) return;
-    const min = getMinFromY(e.clientY);
-    setDrag({startMin: min, endMin: min + 60});
+    if (e.button !== 0 || e.target.closest('[data-res]')) return;
+    e.preventDefault();
+    const min = yToMin(e.clientY);
+    setDrag({startMin: min, endMin: min + 60, active: true});
   };
   const onMouseMove = e => {
-    if (!drag) return;
-    const min = getMinFromY(e.clientY);
+    if (!drag || !drag.active) return;
+    const min = yToMin(e.clientY);
     setDrag(d => ({...d, endMin: Math.max(d.startMin + 30, min + 30)}));
   };
   const onMouseUp = () => {
-    if (drag) {
+    if (drag && drag.active) {
       onSlotClick({date: dateStr, startTime: minToTime(drag.startMin), endTime: minToTime(Math.min(drag.endMin, 24*60))});
       setDrag(null);
     }
   };
 
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const dow = new Date(y, m-1, d).getDay();
+  // Touch
+  const onTouchStart = e => {
+    if (e.target.closest('[data-res]')) return;
+    const t = e.touches[0];
+    const min = yToMin(t.clientY);
+    setDrag({startMin: min, endMin: min + 60, active: true});
+  };
+  const onTouchMove = e => {
+    if (!drag || !drag.active) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    const min = yToMin(t.clientY);
+    setDrag(d => ({...d, endMin: Math.max(d.startMin + 30, min + 30)}));
+  };
+  const onTouchEnd = () => {
+    if (drag && drag.active) {
+      onSlotClick({date: dateStr, startTime: minToTime(drag.startMin), endTime: minToTime(Math.min(drag.endMin, 24*60))});
+      setDrag(null);
+    }
+  };
+
+  const [yr, mo, dy] = dateStr.split('-').map(Number);
+  const dow     = new Date(yr, mo-1, dy).getDay();
   const isToday = dateStr === today();
+  const navBarH = 72;
 
   return (
-    <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
-      {/* nav header */}
-      <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'12px 16px',borderBottom:`1px solid ${P.border}`,background:P.panel,flexShrink:0}}>
-        <button onClick={()=>onNavigate(-1)} style={{background:'#eef1f7',border:'none',borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'16px',color:P.muted}}>‹</button>
-        <div style={{textAlign:'center',flex:1}}>
-          <div style={{fontSize:'13px',color:P.muted}}>{WD[dow]}</div>
-          <div style={{fontSize:'24px',fontWeight:700,lineHeight:1.1,color:isToday?P.accent:P.text,background:isToday?P.accentL+'22':'none',borderRadius:'50%',width:'44px',height:'44px',display:'flex',alignItems:'center',justifyContent:'center',margin:'2px auto'}}>{d}</div>
-          <div style={{fontSize:'12px',color:P.dim}}>{y}年{m}月</div>
-        </div>
-        <button onClick={()=>onNavigate(1)} style={{background:'#eef1f7',border:'none',borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'16px',color:P.muted}}>›</button>
-      </div>
+    <div style={{display:'flex',flexDirection:'column',height:'100%',position:'relative'}}>
 
       {/* scrollable grid */}
-      <div ref={scrollRef} style={{overflowY:'auto',flex:1,position:'relative'}}>
-        <div ref={gridRef} style={{position:'relative',height:`${DAY_HOURS*CELL_H}px`,display:'flex',userSelect:'none'}}
-          onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
+      <div ref={scrollRef} style={{overflowY:'auto',flex:1,paddingBottom:`${navBarH}px`}}>
+        <div ref={gridRef}
+          style={{position:'relative',height:`${DAY_HOURS*CELL_H}px`,display:'flex',
+            userSelect:'none',WebkitUserSelect:'none',
+            touchAction:drag&&drag.active?'none':'pan-y'}}
+          onMouseDown={onMouseDown} onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
+          onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
 
           {/* hour labels */}
-          <div style={{width:'52px',flexShrink:0}}>
+          <div style={{width:'50px',flexShrink:0}}>
             {HOURS.map(h => (
-              <div key={h} style={{height:`${CELL_H}px`,display:'flex',alignItems:'flex-start',justifyContent:'flex-end',paddingRight:'8px',paddingTop:'2px'}}>
-                <span style={{fontSize:'11px',color:P.dim}}>{pad(h)}:00</span>
+              <div key={h} style={{height:`${CELL_H}px`,display:'flex',alignItems:'flex-start',
+                justifyContent:'flex-end',paddingRight:'8px',paddingTop:'3px'}}>
+                <span style={{fontSize:'11px',color:P.dim,lineHeight:1}}>{pad(h)}:00</span>
               </div>
             ))}
           </div>
 
-          {/* grid lines + events */}
+          {/* grid + events */}
           <div style={{flex:1,position:'relative',borderLeft:`1px solid ${P.border}`}}>
             {HOURS.map(h => (
-              <div key={h} style={{height:`${CELL_H}px`,borderBottom:`1px solid ${h%2===1?P.border+'88':P.border}`,boxSizing:'border-box'}}/>
+              <div key={h} style={{height:`${CELL_H}px`,
+                borderBottom:`1px solid ${h%2===1?P.border+'66':P.border}`,
+                boxSizing:'border-box'}}/>
             ))}
 
-            {/* drag selection */}
+            {/* drag ghost */}
             {drag && (
-              <div style={{position:'absolute',left:'2px',right:'2px',top:`${(drag.startMin/60)*CELL_H}px`,height:`${((drag.endMin-drag.startMin)/60)*CELL_H}px`,background:P.accent+'33',border:`2px solid ${P.accent}`,borderRadius:'6px',pointerEvents:'none',zIndex:5}}>
-                <span style={{fontSize:'11px',color:P.accent,padding:'2px 6px',fontWeight:600}}>{minToTime(drag.startMin)}〜{minToTime(Math.min(drag.endMin,24*60))}</span>
+              <div style={{position:'absolute',left:'3px',right:'3px',
+                top:`${(drag.startMin/60)*CELL_H}px`,
+                height:`${((drag.endMin-drag.startMin)/60)*CELL_H}px`,
+                background:P.accent+'28',border:`2px solid ${P.accent}`,
+                borderRadius:'8px',pointerEvents:'none',zIndex:5,
+                display:'flex',flexDirection:'column',justifyContent:'space-between',
+                padding:'4px 8px'}}>
+                <span style={{fontSize:'12px',color:P.accent,fontWeight:700}}>
+                  {minToTime(drag.startMin)}
+                </span>
+                <span style={{fontSize:'12px',color:P.accent,fontWeight:700,textAlign:'right'}}>
+                  {minToTime(Math.min(drag.endMin,24*60))}
+                </span>
               </div>
             )}
 
             {/* reservations */}
             {active.map(r => {
-              const startMin = timeToMin(r.startTime);
-              const endMin   = timeToMin(r.endTime);
-              const dur = Math.max(endMin - startMin, 30);
-              const rc = getRoomColor(rooms, r.room);
+              const sm2 = timeToMin(r.startTime), em2 = timeToMin(r.endTime);
+              const dur = Math.max(em2 - sm2, 30);
+              const rc  = getRoomColor(rooms, r.room);
               return (
-                <div key={r.id} data-res="1" onClick={e=>{e.stopPropagation();onResClick(r);}}
-                  style={{position:'absolute',left:'4px',right:'4px',top:`${(startMin/60)*CELL_H}px`,height:`${(dur/60)*CELL_H}px`,background:rc.bg,borderLeft:`3px solid ${rc.border}`,borderRadius:'5px',padding:'4px 7px',cursor:'pointer',overflow:'hidden',zIndex:10,boxShadow:'0 1px 4px rgba(44,58,80,0.1)'}}>
-                  <div style={{fontSize:'12px',fontWeight:700,color:rc.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.room}</div>
-                  <div style={{fontSize:'11px',color:rc.border,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.startTime}〜{r.endTime}　{r.name}</div>
+                <div key={r.id} data-res="1"
+                  onClick={e=>{e.stopPropagation();onResClick(r);}}
+                  onTouchEnd={e=>{e.stopPropagation();onResClick(r);}}
+                  style={{position:'absolute',left:'4px',right:'4px',
+                    top:`${(sm2/60)*CELL_H}px`,height:`${(dur/60)*CELL_H}px`,
+                    background:rc.bg,borderLeft:`4px solid ${rc.border}`,
+                    borderRadius:'6px',padding:'5px 8px',cursor:'pointer',
+                    overflow:'hidden',zIndex:10,
+                    boxShadow:'0 1px 4px rgba(44,58,80,0.12)'}}>
+                  <div style={{fontSize:'12px',fontWeight:700,color:rc.text,
+                    whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.room}</div>
+                  <div style={{fontSize:'11px',color:rc.border,
+                    whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                    {r.startTime}〜{r.endTime}　{r.name}
+                  </div>
                 </div>
               );
             })}
           </div>
         </div>
+      </div>
+
+      {/* Fixed bottom nav bar */}
+      <div style={{position:'absolute',bottom:0,left:0,right:0,height:`${navBarH}px`,
+        background:P.panel,borderTop:`1px solid ${P.border}`,
+        display:'flex',alignItems:'center',
+        boxShadow:'0 -4px 16px rgba(44,58,80,0.10)',zIndex:50}}>
+        <button onClick={()=>onNavigate(-1)}
+          style={{flex:'0 0 64px',height:'100%',background:'none',border:'none',
+            fontSize:'26px',color:P.muted,cursor:'pointer',
+            display:'flex',alignItems:'center',justifyContent:'center'}}>‹</button>
+        <div style={{flex:1,textAlign:'center',lineHeight:1.3}}>
+          <div style={{fontSize:'11px',color:P.muted,letterSpacing:'0.08em'}}>{yr}年{mo}月</div>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+            <span style={{
+              fontSize:'28px',fontWeight:800,
+              color:isToday?'#fff':dow===0?P.danger:dow===6?P.accentL:P.text,
+              background:isToday?P.accent:'none',
+              borderRadius:'50%',width:'46px',height:'46px',
+              display:'inline-flex',alignItems:'center',justifyContent:'center'}}>
+              {dy}
+            </span>
+            <span style={{fontSize:'14px',
+              color:isToday?P.accent:dow===0?P.danger:dow===6?P.accentL:P.muted,
+              fontWeight:600}}>({WD[dow]})</span>
+          </div>
+        </div>
+        <button onClick={()=>onNavigate(1)}
+          style={{flex:'0 0 64px',height:'100%',background:'none',border:'none',
+            fontSize:'26px',color:P.muted,cursor:'pointer',
+            display:'flex',alignItems:'center',justifyContent:'center'}}>›</button>
       </div>
     </div>
   );
@@ -552,6 +639,65 @@ const RoomMgr = ({rooms, onAdd, onRemove, loading}) => {
   );
 };
 
+// ── Settings Modal ───────────────────────────────────────
+const SettingsModal = ({gasUrl, setGasUrl, recipients, setRecipients, onClose}) => {
+  const [newAddr, setNewAddr] = useState('');
+  const addAddr = () => {
+    const a = newAddr.trim();
+    if (a && a.includes('@') && !recipients.includes(a)) {
+      setRecipients(r => [...r, a]);
+      setNewAddr('');
+    }
+  };
+  const removeAddr = a => setRecipients(r => r.filter(x => x !== a));
+  return (
+    <Modal title="⚙️ システム設定" onClose={onClose}>
+      <div style={{marginBottom:'20px'}}>
+        <Lbl>GAS Web App URL（メール送信用）</Lbl>
+        <input value={gasUrl} onChange={e=>setGasUrl(e.target.value)}
+          placeholder="https://script.google.com/macros/s/.../exec"
+          style={{...IS,fontSize:'12px',marginBottom:'6px'}}
+          onFocus={e=>e.target.style.borderColor=P.accent} onBlur={e=>e.target.style.borderColor=P.border}/>
+        <p style={{fontSize:'11px',color:P.dim,margin:0}}>
+          GASをデプロイ後、表示されたURLを貼り付けてください
+        </p>
+      </div>
+
+      <div>
+        <Lbl>メール送信先</Lbl>
+        <div style={{fontSize:'11px',color:P.dim,marginBottom:'8px'}}>
+          送信元: f.ryota89@gmail.com（GASアカウント）
+        </div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          <input value={newAddr} onChange={e=>setNewAddr(e.target.value)}
+            onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addAddr();} }}
+            placeholder="追加するメールアドレス"
+            style={{...IS,flex:1,fontSize:'13px'}}
+            onFocus={e=>e.target.style.borderColor=P.accent} onBlur={e=>e.target.style.borderColor=P.border}/>
+          <Btn onClick={addAddr}>追加</Btn>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+          {recipients.map(addr => (
+            <div key={addr} style={{display:'flex',alignItems:'center',justifyContent:'space-between',
+              background:'#f5f7fc',border:`1px solid ${P.border}`,borderRadius:'8px',padding:'9px 12px'}}>
+              <span style={{fontSize:'13px',color:P.text}}>📧 {addr}</span>
+              <button onClick={()=>removeAddr(addr)} style={{background:'none',border:'none',
+                color:P.danger,cursor:'pointer',fontSize:'18px',lineHeight:1,padding:'0 4px'}}>×</button>
+            </div>
+          ))}
+          {recipients.length === 0 && (
+            <p style={{color:P.dim,fontSize:'12px',textAlign:'center',padding:'12px'}}>送信先がありません</p>
+          )}
+        </div>
+      </div>
+
+      <div style={{display:'flex',justifyContent:'flex-end',marginTop:'20px'}}>
+        <Btn onClick={onClose}>閉じる</Btn>
+      </div>
+    </Modal>
+  );
+};
+
 // ── Main App ──────────────────────────────────────────────
 function App() {
   const [ready,setReady]       = useState(false);
@@ -575,6 +721,9 @@ function App() {
   const [pwTarget,setPwTarget]   = useState(null);
   const [pwAction,setPwAction]   = useState(null);
   const [detailRes,setDetailRes] = useState(null);
+  const [mailRecipients,setMailRecipients] = useState(['k2216001@maniwa.gse.okayama-c.ed.jp']);
+  const [gasUrl,setGasUrl] = useState('');
+  const [showSettings,setShowSettings] = useState(false);
 
   useEffect(() => {
     let u1,u2;
@@ -585,11 +734,14 @@ function App() {
     return () => { u1&&u1(); u2&&u2(); };
   }, []);
 
+  // GAS URLをグローバル変数に同期
+  useEffect(() => { GAS_URL = gasUrl; }, [gasUrl]);
+
   const addRoom    = async n => { setBusy(true); try{ await addD('meeting_rooms',{name:n}); }catch(e){alert(e.message);} finally{setBusy(false);} };
   const removeRoom = async n => { setBusy(true); try{ const docs=await getDs('meeting_rooms'); const t=docs.find(d=>d.name===n); if(t) await delD('meeting_rooms',t.id); }catch(e){alert(e.message);} finally{setBusy(false);} };
-  const addRes     = async form => { setBusy(true); try{ const now=new Date().toISOString(); await addD('meeting_reservations',{...form,status:'申請中',createdAt:now,updatedAt:now}); setShowForm(false);setFormPrefill(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
-  const updateRes  = async form => { setBusy(true); try{ await updD('meeting_reservations',editTarget.id,{...form,updatedAt:new Date().toISOString()}); setEditTarget(null);setDetailRes(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
-  const cancelRes  = async ()  => { setBusy(true); try{ await updD('meeting_reservations',cancelTarget.id,{status:'取消',updatedAt:new Date().toISOString()}); setCancelTarget(null);setDetailRes(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const addRes     = async form => { setBusy(true); try{ const now=new Date().toISOString(); const saved={...form,status:'申請中',createdAt:now,updatedAt:now}; await addD('meeting_reservations',saved); await sendMailViaGAS('sendReservation',form,mailRecipients); setShowForm(false);setFormPrefill(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const updateRes  = async form => { setBusy(true); try{ await updD('meeting_reservations',editTarget.id,{...form,updatedAt:new Date().toISOString()}); await sendMailViaGAS('sendUpdate',form,mailRecipients); setEditTarget(null);setDetailRes(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const cancelRes  = async ()  => { setBusy(true); try{ await updD('meeting_reservations',cancelTarget.id,{status:'取消',updatedAt:new Date().toISOString()}); await sendMailViaGAS('sendCancel',cancelTarget,mailRecipients); setCancelTarget(null);setDetailRes(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
 
   const reqEdit   = r => { setDetailRes(null); setPwTarget(r); setPwAction('edit'); };
   const reqCancel = r => { setDetailRes(null); setPwTarget(r); setPwAction('cancel'); };
@@ -644,6 +796,7 @@ function App() {
             {activeCount>0 && <span style={{background:'#e8a87c',color:'#fff',borderRadius:'20px',padding:'3px 10px',fontSize:'12px',fontWeight:700}}>申請中 {activeCount}件</span>}
             <Btn onClick={()=>{setFormPrefill(null);setShowForm(true);}}>＋ 新規申請</Btn>
             <Btn variant="ghost" size="sm" style={{color:'rgba(255,255,255,0.75)',border:'1px solid rgba(255,255,255,0.3)'}} onClick={()=>exportCSV(reservations)}>CSV</Btn>
+            <Btn variant="ghost" size="sm" style={{color:'rgba(255,255,255,0.75)',border:'1px solid rgba(255,255,255,0.3)'}} onClick={()=>setShowSettings(true)}>⚙️ 設定</Btn>
           </div>
         </div>
         <div style={{display:'flex',maxWidth:'1200px',margin:'0 auto'}}>
@@ -693,6 +846,13 @@ function App() {
         </Modal>
       )}
       {pwTarget && <PwDialog storedHash={pwTarget.passwordHash} onConfirm={pwConfirm} onCancel={()=>{setPwTarget(null);setPwAction(null);}}/>}
+      {showSettings && (
+        <SettingsModal
+          gasUrl={gasUrl} setGasUrl={setGasUrl}
+          recipients={mailRecipients} setRecipients={setMailRecipients}
+          onClose={()=>setShowSettings(false)}
+        />
+      )}
     </div>
   );
 }
