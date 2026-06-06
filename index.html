@@ -43,6 +43,10 @@ const updD    = (col, id, data) => db.collection(col).doc(id).update(data);
 const delD    = (col, id)       => db.collection(col).doc(id).delete();
 const getDs   = (col)           => db.collection(col).get().then(s => s.docs.map(d => ({ id: d.id, ...d.data() })));
 const onSnap  = (col, cb)       => db.collection(col).onSnapshot(s => cb(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+// 設定（GAS URL・送信先・管理者PW）を1ドキュメントで共有
+const SETTINGS_DOC = () => db.collection('meeting_settings').doc('config');
+const saveSettings  = (data) => SETTINGS_DOC().set(data, { merge: true });
+const onSettingsSnap = (cb) => SETTINGS_DOC().onSnapshot(d => cb(d.exists ? d.data() : null));
 // ── GAS Mail API ──────────────────────────────────────────
 // GASデプロイ後にURLをここに貼り付け
 let GAS_URL = "";
@@ -648,7 +652,7 @@ const ResDetail = ({res, rooms, onClose, onEdit, onCancel}) => {
       </div>
       <div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'6px 12px',fontSize:'13px',color:P.muted,marginBottom:'16px'}}>
         <span>👤</span><span style={{color:P.text}}>{res.name}</span>
-        <span>📞</span><span style={{color:P.text}}>{res.contact}</span>
+        <span>📞</span><span style={{color:P.dim}}>（非表示）</span>
         <span>📋</span><span style={{color:P.text}}>{res.purpose}</span>
         <span>👥</span><span style={{color:P.text}}>{res.people}人</span>
         <span>📌</span><span><span style={{padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:700,color:sColor(res.status),border:`1px solid ${sColor(res.status)}44`,background:sColor(res.status)+'11'}}>{res.status}</span></span>
@@ -902,16 +906,41 @@ function App() {
   const [settingsGate,setSettingsGate] = useState(false); // password prompt before settings
 
   useEffect(() => {
-    let u1,u2;
+    let u1,u2,u3;
     try {
       u1 = onSnap('meeting_rooms', docs => { if(docs.length>0) setRooms(docs.map(d=>d.name).filter(Boolean)); });
       u2 = onSnap('meeting_reservations', docs => { setRes(docs); setReady(true); });
+      u3 = onSettingsSnap(cfg => {
+        if (cfg) {
+          if (typeof cfg.gasUrl === 'string') setGasUrl(cfg.gasUrl);
+          if (Array.isArray(cfg.recipients)) setMailRecipients(cfg.recipients);
+          if (typeof cfg.adminPw === 'string') setAdminPw(cfg.adminPw);
+        } else {
+          // 初回のみ：デフォルト設定をFirestoreに作成
+          saveSettings({
+            gasUrl: '',
+            recipients: ['k2216001@maniwa.gse.okayama-c.ed.jp'],
+            adminPw: 'yoyaku'
+          });
+        }
+      });
     } catch(e) { setFireErr('Firebase接続エラー: '+e.message); setReady(true); }
-    return () => { u1&&u1(); u2&&u2(); };
+    return () => { u1&&u1(); u2&&u2(); u3&&u3(); };
   }, []);
 
   // GAS URLをグローバル変数に同期
   useEffect(() => { GAS_URL = gasUrl; }, [gasUrl]);
+
+  // 設定をFirestoreに保存（全端末で共有）
+  const persistGasUrl = (v) => { setGasUrl(v); saveSettings({ gasUrl: v }); };
+  const persistRecipients = (updater) => {
+    setMailRecipients(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      saveSettings({ recipients: next });
+      return next;
+    });
+  };
+  const persistAdminPw = (v) => { setAdminPw(v); saveSettings({ adminPw: v }); };
 
   const addRoom    = async n => { setBusy(true); try{ await addD('meeting_rooms',{name:n}); }catch(e){alert(e.message);} finally{setBusy(false);} };
   const removeRoom = async n => { setBusy(true); try{ const docs=await getDs('meeting_rooms'); const t=docs.find(d=>d.name===n); if(t) await delD('meeting_rooms',t.id); }catch(e){alert(e.message);} finally{setBusy(false);} };
@@ -1042,11 +1071,11 @@ function App() {
       {pwTarget && <PwDialog storedHash={pwTarget.passwordHash} onConfirm={pwConfirm} onCancel={()=>{setPwTarget(null);setPwAction(null);}}/>}
       {showSettings && (
         <SettingsModal
-          gasUrl={gasUrl} setGasUrl={setGasUrl}
-          recipients={mailRecipients} setRecipients={setMailRecipients}
+          gasUrl={gasUrl} setGasUrl={persistGasUrl}
+          recipients={mailRecipients} setRecipients={persistRecipients}
           rooms={rooms} onAddRoom={addRoom} onRemoveRoom={removeRoom}
           reservations={reservations}
-          adminPw={adminPw} setAdminPw={setAdminPw}
+          adminPw={adminPw} setAdminPw={persistAdminPw}
           loading={busy}
           onClose={()=>setShowSettings(false)}
         />
