@@ -242,7 +242,7 @@ const ResForm = ({rooms, onSubmit, onClose, initial=null, loading, prefill=null}
   );
 };
 
-// ── Day View (touch-friendly, fixed date bar at top) ────────
+// ── Day View (touch-friendly) ───────────────────────────────
 const CELL_H = 64;
 const DAY_HOURS = 24;
 
@@ -250,8 +250,9 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
   const active = reservations.filter(r => r.status !== '取消' && r.startDate <= dateStr && r.endDate >= dateStr);
   const scrollRef = useRef(null);
   const gridRef   = useRef(null);
-  const dragRef   = useRef(null); // use ref (not state) so touch handlers stay stable
-  const [dragVis, setDragVis] = useState(null); // {startMin, endMin} for rendering only
+  const [dragVis, setDragVis] = useState(null);     // visible selection
+  const [dragging, setDragging] = useState(false);  // true once a drag is committed
+  const dragRef = useRef(null);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 8 * CELL_H;
@@ -260,76 +261,80 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
   const yToMin = (clientY) => {
     if (!gridRef.current || !scrollRef.current) return 0;
     const rect = gridRef.current.getBoundingClientRect();
-    const relY  = clientY - rect.top + scrollRef.current.scrollTop;
+    const relY = clientY - rect.top + scrollRef.current.scrollTop;
     return Math.max(0, Math.min(23*60+30, Math.round((relY/CELL_H)*60/30)*30));
   };
 
-  // ── Touch: prevent scroll immediately on touchstart so drag works ──
-  // Touch state refs (stable across renders)
-  const touchStartY = useRef(null);
-  const touchMoved  = useRef(false);
-  const MOVE_THRESH = 8; // px — below this = tap, above = drag
+  // ── Native (non-passive) touch listeners so preventDefault works on iOS ──
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
 
-  const handleTouchStart = (e) => {
-    if (e.target.closest('[data-res]')) return;
-    const touch = e.touches[0];
-    touchStartY.current = touch.clientY;
-    touchMoved.current  = false;
-    dragRef.current     = null;
-    setDragVis(null);
-    // Don't preventDefault yet — wait to see if it's a drag or scroll
-  };
+    let startY = null, startX = null, started = false, committed = false;
+    const TH = 6;
 
-  const handleTouchMove = (e) => {
-    if (!touchStartY.current) return;
-    const touch  = e.touches[0];
-    const deltaY = touch.clientY - touchStartY.current;
+    const onStart = (e) => {
+      if (e.target.closest('[data-res]')) return;
+      const t = e.touches[0];
+      startY = t.clientY; startX = t.clientX;
+      started = true; committed = false;
+      dragRef.current = null;
+    };
 
-    if (!touchMoved.current) {
-      if (Math.abs(deltaY) < MOVE_THRESH) return; // not moved enough yet
+    const onMove = (e) => {
+      if (!started) return;
+      const t = e.touches[0];
+      const dy = t.clientY - startY;
+      const dx = t.clientX - startX;
 
-      // Decide: vertical drag on grid → start selection
-      // Allow scroll if touch started in label column (x < 50)
-      const gridRect = gridRef.current.getBoundingClientRect();
-      const xInGrid  = touch.clientX - gridRect.left;
-      if (xInGrid < 50) {
-        // label column — allow native scroll, abort drag
-        touchStartY.current = null;
-        return;
+      if (!committed) {
+        // wait until enough movement to decide
+        if (Math.abs(dy) < TH && Math.abs(dx) < TH) return;
+        // if touch began in the time-label column, let it scroll
+        const rect = gridRef.current.getBoundingClientRect();
+        if (startX - rect.left < 50) { started = false; return; }
+        // commit to drag-select
+        committed = true;
+        setDragging(true);
+        const min = yToMin(startY);
+        dragRef.current = { startMin: min, endMin: Math.max(min+30, yToMin(t.clientY)+30) };
+        setDragVis({...dragRef.current});
       }
-      // grid area — start drag selection
-      touchMoved.current = true;
-      const min = yToMin(touchStartY.current); // use original touch Y
-      dragRef.current = { startMin: min, endMin: Math.max(min+30, yToMin(touch.clientY)+30) };
-      setDragVis({...dragRef.current});
-    }
 
-    // Already dragging
-    if (dragRef.current) {
-      e.preventDefault(); // now prevent scroll
-      const min  = yToMin(touch.clientY);
-      const next = { startMin: dragRef.current.startMin, endMin: Math.max(dragRef.current.startMin+30, min+30) };
-      dragRef.current = next;
-      setDragVis({...next});
-    }
-  };
+      if (committed) {
+        e.preventDefault();   // block page scroll — works because listener is non-passive
+        const min = yToMin(t.clientY);
+        const next = { startMin: dragRef.current.startMin, endMin: Math.max(dragRef.current.startMin+30, min+30) };
+        dragRef.current = next;
+        setDragVis({...next});
+      }
+    };
 
-  const handleTouchEnd = () => {
-    if (!touchStartY.current) return;
-    if (dragRef.current) {
-      // Completed drag → open form
-      const {startMin, endMin} = dragRef.current;
-      dragRef.current     = null;
-      touchStartY.current = null;
-      setDragVis(null);
-      onSlotClick({date:dateStr, startTime:minToTime(startMin), endTime:minToTime(Math.min(endMin,24*60))});
-    } else {
-      // Tap (no significant movement) → open form at tapped time
-      const min = yToMin(touchStartY.current);
-      touchStartY.current = null;
-      onSlotClick({date:dateStr, startTime:minToTime(min), endTime:minToTime(Math.min(min+60,24*60))});
-    }
-  };
+    const onEnd = () => {
+      if (!started) { return; }
+      if (committed && dragRef.current) {
+        const {startMin, endMin} = dragRef.current;
+        onSlotClick({date:dateStr, startTime:minToTime(startMin), endTime:minToTime(Math.min(endMin,24*60))});
+      } else if (!committed && startY !== null) {
+        // simple tap → 1-hour slot
+        const min = yToMin(startY);
+        onSlotClick({date:dateStr, startTime:minToTime(min), endTime:minToTime(Math.min(min+60,24*60))});
+      }
+      started = false; committed = false; dragRef.current = null;
+      setDragging(false); setDragVis(null);
+    };
+
+    grid.addEventListener('touchstart', onStart, {passive:true});
+    grid.addEventListener('touchmove',  onMove,  {passive:false});
+    grid.addEventListener('touchend',   onEnd,   {passive:true});
+    grid.addEventListener('touchcancel',onEnd,   {passive:true});
+    return () => {
+      grid.removeEventListener('touchstart', onStart);
+      grid.removeEventListener('touchmove',  onMove);
+      grid.removeEventListener('touchend',   onEnd);
+      grid.removeEventListener('touchcancel',onEnd);
+    };
+  }, [dateStr, onSlotClick]);
 
   // ── Mouse (desktop) ───────────────────────────────────────
   const mouseRef = useRef(null);
@@ -360,74 +365,44 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
   const isToday = dateStr === today();
 
   return (
-    <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
+    <div style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
 
-      {/* ── Fixed top: date nav bar ──────────────────────── */}
+      {/* ── Date nav bar (always visible, sticky at top of panel) ── */}
       <div style={{
-        flexShrink:0,
-        background:P.panel,
-        borderBottom:`1px solid ${P.border}`,
-        display:'flex',alignItems:'center',
-        boxShadow:'0 2px 8px rgba(44,58,80,0.07)',
-        zIndex:20,
+        flexShrink:0,background:P.panel,borderBottom:`1px solid ${P.border}`,
+        display:'flex',alignItems:'center',boxShadow:'0 2px 8px rgba(44,58,80,0.07)',zIndex:30,
       }}>
-        <button onClick={()=>onNavigate(-1)}
-          style={{flex:'0 0 56px',height:'64px',background:'none',border:'none',
-            fontSize:'24px',color:P.muted,cursor:'pointer',
-            display:'flex',alignItems:'center',justifyContent:'center'}}>‹</button>
-
-        <div style={{flex:1,textAlign:'center',padding:'8px 0'}}>
-          <div style={{fontSize:'11px',color:P.dim,letterSpacing:'0.08em',marginBottom:'2px'}}>{yr}年{mo}月</div>
+        <button onClick={()=>onNavigate(-1)} style={{flex:'0 0 56px',height:'62px',background:'#f2f5fa',border:'none',
+          fontSize:'24px',color:P.accent,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>‹</button>
+        <div style={{flex:1,textAlign:'center',padding:'7px 0'}}>
+          <div style={{fontSize:'11px',color:P.dim,letterSpacing:'0.08em',marginBottom:'1px'}}>{yr}年{mo}月</div>
           <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
-            <span style={{
-              fontSize:'26px',fontWeight:800,
+            <span style={{fontSize:'24px',fontWeight:800,
               color:isToday?'#fff':dow===0?P.danger:dow===6?P.accentL:P.text,
-              background:isToday?P.accent:'none',
-              borderRadius:'50%',width:'44px',height:'44px',
-              display:'inline-flex',alignItems:'center',justifyContent:'center'}}>
-              {dy}
-            </span>
+              background:isToday?P.accent:'none',borderRadius:'50%',width:'42px',height:'42px',
+              display:'inline-flex',alignItems:'center',justifyContent:'center'}}>{dy}</span>
             <span style={{fontSize:'14px',fontWeight:600,
-              color:isToday?P.accent:dow===0?P.danger:dow===6?P.accentL:P.muted}}>
-              ({WD[dow]})
-            </span>
+              color:isToday?P.accent:dow===0?P.danger:dow===6?P.accentL:P.muted}}>({WD[dow]})</span>
           </div>
         </div>
-
-        <button onClick={()=>onNavigate(1)}
-          style={{flex:'0 0 56px',height:'64px',background:'none',border:'none',
-            fontSize:'24px',color:P.muted,cursor:'pointer',
-            display:'flex',alignItems:'center',justifyContent:'center'}}>›</button>
+        <button onClick={()=>onNavigate(1)} style={{flex:'0 0 56px',height:'62px',background:'#f2f5fa',border:'none',
+          fontSize:'24px',color:P.accent,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>›</button>
       </div>
 
-      {/* ── Scrollable time grid ──────────────────────────── */}
-      <div ref={scrollRef} style={{overflowY:'auto',flex:1}}>
+      {/* ── Scrollable grid ─────────────────────────────────── */}
+      <div ref={scrollRef} style={{overflowY:'auto',flex:1,WebkitOverflowScrolling:'touch'}}>
         <div ref={gridRef}
-          style={{
-            position:'relative',
-            height:`${DAY_HOURS*CELL_H}px`,
-            display:'flex',
-            userSelect:'none',
-            WebkitUserSelect:'none',
-            // Always prevent browser scroll on the grid;
-            // scrollRef handles scrolling of the outer container
-            touchAction:'pan-y',
-          }}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-          onTouchCancel={handleTouchEnd}
-        >
-          {/* hour labels — tapping here still allows scroll (handled in touchstart) */}
+          style={{position:'relative',height:`${DAY_HOURS*CELL_H}px`,display:'flex',
+            userSelect:'none',WebkitUserSelect:'none',
+            touchAction: dragging ? 'none' : 'pan-y'}}
+          onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
+
+          {/* hour labels */}
           <div style={{width:'50px',flexShrink:0}}>
             {HOURS.map(h => (
-              <div key={h} style={{height:`${CELL_H}px`,display:'flex',
-                alignItems:'flex-start',justifyContent:'flex-end',
-                paddingRight:'8px',paddingTop:'3px'}}>
+              <div key={h} style={{height:`${CELL_H}px`,display:'flex',alignItems:'flex-start',
+                justifyContent:'flex-end',paddingRight:'8px',paddingTop:'3px'}}>
                 <span style={{fontSize:'11px',color:P.dim,lineHeight:1,pointerEvents:'none'}}>{pad(h)}:00</span>
               </div>
             ))}
@@ -441,25 +416,18 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
                 boxSizing:'border-box',pointerEvents:'none'}}/>
             ))}
 
-            {/* drag ghost */}
             {dragVis && (
-              <div style={{
-                position:'absolute',left:'3px',right:'3px',
+              <div style={{position:'absolute',left:'3px',right:'3px',
                 top:`${(dragVis.startMin/60)*CELL_H}px`,
                 height:`${((dragVis.endMin-dragVis.startMin)/60)*CELL_H}px`,
-                background:P.accent+'28',
-                border:`2px solid ${P.accent}`,
-                borderRadius:'8px',
-                pointerEvents:'none',zIndex:5,
-                display:'flex',flexDirection:'column',
-                justifyContent:'space-between',padding:'5px 8px',
-              }}>
+                background:P.accent+'28',border:`2px solid ${P.accent}`,borderRadius:'8px',
+                pointerEvents:'none',zIndex:5,display:'flex',flexDirection:'column',
+                justifyContent:'space-between',padding:'5px 8px'}}>
                 <span style={{fontSize:'13px',color:P.accent,fontWeight:700}}>{minToTime(dragVis.startMin)}</span>
                 <span style={{fontSize:'13px',color:P.accent,fontWeight:700,textAlign:'right'}}>{minToTime(Math.min(dragVis.endMin,24*60))}</span>
               </div>
             )}
 
-            {/* reservations */}
             {active.map(r => {
               const sm2 = timeToMin(r.startTime), em2 = timeToMin(r.endTime);
               const dur = Math.max(em2-sm2, 30);
@@ -467,22 +435,15 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
               return (
                 <div key={r.id} data-res="1"
                   onClick={e=>{e.stopPropagation();onResClick(r);}}
-                  onTouchEnd={e=>{e.stopPropagation();if(!dragRef.current) onResClick(r);}}
-                  style={{
-                    position:'absolute',left:'4px',right:'4px',
-                    top:`${(sm2/60)*CELL_H}px`,
-                    height:`${(dur/60)*CELL_H}px`,
-                    background:rc.bg,borderLeft:`4px solid ${rc.border}`,
-                    borderRadius:'6px',padding:'5px 8px',
-                    cursor:'pointer',overflow:'hidden',zIndex:10,
-                    boxShadow:'0 1px 4px rgba(44,58,80,0.12)',
-                  }}>
+                  style={{position:'absolute',left:'4px',right:'4px',
+                    top:`${(sm2/60)*CELL_H}px`,height:`${(dur/60)*CELL_H}px`,
+                    background:rc.bg,borderLeft:`4px solid ${rc.border}`,borderRadius:'6px',
+                    padding:'5px 8px',cursor:'pointer',overflow:'hidden',zIndex:10,
+                    boxShadow:'0 1px 4px rgba(44,58,80,0.12)'}}>
                   <div style={{fontSize:'12px',fontWeight:700,color:rc.text,
                     whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.room}</div>
                   <div style={{fontSize:'11px',color:rc.border,
-                    whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                    {r.startTime}〜{r.endTime}　{r.name}
-                  </div>
+                    whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.startTime}〜{r.endTime}　{r.name}</div>
                 </div>
               );
             })}
