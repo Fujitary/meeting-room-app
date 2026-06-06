@@ -642,7 +642,7 @@ const HistView = ({reservations, rooms, onEdit, onCancel}) => {
   const [fr,setFr]=useState('すべて'),[fs,setFs]=useState('すべて'),[q,setQ]=useState('');
   const filt = reservations.filter(r=>(fr==='すべて'||r.room===fr)&&(fs==='すべて'||r.status===fs)&&(r.name.includes(q)||r.purpose.includes(q)||r.room.includes(q))).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
   return (
-    <div style={{padding:'20px'}}>
+    <div style={{padding:'20px',overflowY:'auto',height:'100%'}}>
       <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'14px'}}>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 名前・用途で検索" style={{...IS,flex:1,minWidth:'140px'}}/>
         <select value={fr} onChange={e=>setFr(e.target.value)} style={{...IS,width:'auto'}}><option>すべて</option>{rooms.map(r=><option key={r}>{r}</option>)}</select>
@@ -700,60 +700,146 @@ const RoomMgr = ({rooms, onAdd, onRemove, loading}) => {
   );
 };
 
-// ── Settings Modal ───────────────────────────────────────
-const SettingsModal = ({gasUrl, setGasUrl, recipients, setRecipients, onClose}) => {
+// ── Admin password gate ──────────────────────────────────
+const AdminGate = ({adminPw, onConfirm, onCancel}) => {
+  const [pw, setPw] = useState(''), [err, setErr] = useState('');
+  const check = () => { if(pw===adminPw) onConfirm(); else setErr('パスワードが違います'); };
+  return (
+    <Modal title="🔑 管理者認証" onClose={onCancel}>
+      <p style={{color:P.muted,fontSize:'13px',marginTop:0}}>設定画面を開くには管理者パスワードを入力してください。</p>
+      <FI label="管理者パスワード" type="password" value={pw}
+        onChange={e=>{setPw(e.target.value);setErr('');}}
+        onKeyDown={e=>{if(e.key==='Enter')check();}} placeholder="••••"/>
+      {err && <p style={{color:P.danger,fontSize:'12px',marginTop:'-6px'}}>{err}</p>}
+      <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
+        <Btn variant="ghost" onClick={onCancel}>キャンセル</Btn>
+        <Btn onClick={check}>確認</Btn>
+      </div>
+    </Modal>
+  );
+};
+
+// ── Settings Modal (tabbed) ──────────────────────────────
+const SettingsModal = ({gasUrl, setGasUrl, recipients, setRecipients,
+                        rooms, onAddRoom, onRemoveRoom, reservations,
+                        adminPw, setAdminPw, onClose, loading}) => {
+  const [tab, setTab] = useState('mail');
   const [newAddr, setNewAddr] = useState('');
+  const [newRoom, setNewRoom] = useState('');
+  const [pw1, setPw1] = useState('');
+
   const addAddr = () => {
     const a = newAddr.trim();
-    if (a && a.includes('@') && !recipients.includes(a)) {
-      setRecipients(r => [...r, a]);
-      setNewAddr('');
-    }
+    if (a && a.includes('@') && !recipients.includes(a)) { setRecipients(r=>[...r,a]); setNewAddr(''); }
   };
   const removeAddr = a => setRecipients(r => r.filter(x => x !== a));
+  const addRoom = () => { const r=newRoom.trim(); if(r&&!rooms.includes(r)){onAddRoom(r);setNewRoom('');} };
+
+  const TABS = [
+    {id:'mail',  label:'📧 メール'},
+    {id:'rooms', label:'🏢 会議室'},
+    {id:'data',  label:'📋 データ'},
+    {id:'admin', label:'🔑 管理者'},
+  ];
+
   return (
-    <Modal title="⚙️ システム設定" onClose={onClose}>
-      <div style={{marginBottom:'20px'}}>
-        <Lbl>GAS Web App URL（メール送信用）</Lbl>
-        <input value={gasUrl} onChange={e=>setGasUrl(e.target.value)}
-          placeholder="https://script.google.com/macros/s/.../exec"
-          style={{...IS,fontSize:'12px',marginBottom:'6px'}}
-          onFocus={e=>e.target.style.borderColor=P.accent} onBlur={e=>e.target.style.borderColor=P.border}/>
-        <p style={{fontSize:'11px',color:P.dim,margin:0}}>
-          GASをデプロイ後、表示されたURLを貼り付けてください
-        </p>
+    <Modal title="⚙️ システム設定" onClose={onClose} width="560px">
+      {/* sub-tabs */}
+      <div style={{display:'flex',gap:'4px',marginBottom:'18px',background:'#eef1f7',borderRadius:'8px',padding:'3px',flexWrap:'wrap'}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,minWidth:'70px',padding:'7px 4px',borderRadius:'6px',border:'none',fontFamily:'inherit',fontSize:'12px',fontWeight:700,cursor:'pointer',background:tab===t.id?'#fff':'transparent',color:tab===t.id?P.accent:P.muted,boxShadow:tab===t.id?'0 1px 4px rgba(44,58,80,0.1)':'none'}}>{t.label}</button>
+        ))}
       </div>
 
-      <div>
-        <Lbl>メール送信先</Lbl>
-        <div style={{fontSize:'11px',color:P.dim,marginBottom:'8px'}}>
-          送信元: f.ryota89@gmail.com（GASアカウント）
+      {/* ── Mail ── */}
+      {tab==='mail' && (
+        <div>
+          <div style={{marginBottom:'18px'}}>
+            <Lbl>GAS Web App URL（メール送信用）</Lbl>
+            <input value={gasUrl} onChange={e=>setGasUrl(e.target.value)}
+              placeholder="https://script.google.com/macros/s/.../exec"
+              style={{...IS,fontSize:'12px'}}
+              onFocus={e=>e.target.style.borderColor=P.accent} onBlur={e=>e.target.style.borderColor=P.border}/>
+            <p style={{fontSize:'11px',color:P.dim,margin:'4px 0 0'}}>GASをデプロイ後、表示されたURLを貼り付け</p>
+          </div>
+          <Lbl>メール送信先</Lbl>
+          <div style={{fontSize:'11px',color:P.dim,marginBottom:'8px'}}>送信元: f.ryota89@gmail.com</div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <input value={newAddr} onChange={e=>setNewAddr(e.target.value)}
+              onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addAddr();}}}
+              placeholder="追加するメールアドレス" style={{...IS,flex:1,fontSize:'13px'}}
+              onFocus={e=>e.target.style.borderColor=P.accent} onBlur={e=>e.target.style.borderColor=P.border}/>
+            <Btn onClick={addAddr}>追加</Btn>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+            {recipients.map(addr=>(
+              <div key={addr} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'#f5f7fc',border:`1px solid ${P.border}`,borderRadius:'8px',padding:'9px 12px'}}>
+                <span style={{fontSize:'13px',color:P.text,wordBreak:'break-all'}}>📧 {addr}</span>
+                <button onClick={()=>removeAddr(addr)} style={{background:'none',border:'none',color:P.danger,cursor:'pointer',fontSize:'18px',lineHeight:1,padding:'0 4px',flexShrink:0}}>×</button>
+              </div>
+            ))}
+            {recipients.length===0 && <p style={{color:P.dim,fontSize:'12px',textAlign:'center',padding:'12px'}}>送信先がありません</p>}
+          </div>
         </div>
-        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-          <input value={newAddr} onChange={e=>setNewAddr(e.target.value)}
-            onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addAddr();} }}
-            placeholder="追加するメールアドレス"
-            style={{...IS,flex:1,fontSize:'13px'}}
-            onFocus={e=>e.target.style.borderColor=P.accent} onBlur={e=>e.target.style.borderColor=P.border}/>
-          <Btn onClick={addAddr}>追加</Btn>
-        </div>
-        <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
-          {recipients.map(addr => (
-            <div key={addr} style={{display:'flex',alignItems:'center',justifyContent:'space-between',
-              background:'#f5f7fc',border:`1px solid ${P.border}`,borderRadius:'8px',padding:'9px 12px'}}>
-              <span style={{fontSize:'13px',color:P.text}}>📧 {addr}</span>
-              <button onClick={()=>removeAddr(addr)} style={{background:'none',border:'none',
-                color:P.danger,cursor:'pointer',fontSize:'18px',lineHeight:1,padding:'0 4px'}}>×</button>
-            </div>
-          ))}
-          {recipients.length === 0 && (
-            <p style={{color:P.dim,fontSize:'12px',textAlign:'center',padding:'12px'}}>送信先がありません</p>
-          )}
-        </div>
-      </div>
+      )}
 
-      <div style={{display:'flex',justifyContent:'flex-end',marginTop:'20px'}}>
-        <Btn onClick={onClose}>閉じる</Btn>
+      {/* ── Rooms ── */}
+      {tab==='rooms' && (
+        <div>
+          <Lbl>会議室の管理</Lbl>
+          <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+            <input value={newRoom} onChange={e=>setNewRoom(e.target.value)}
+              placeholder="会議室名を入力" style={{...IS,flex:1}}
+              onFocus={e=>e.target.style.borderColor=P.accent} onBlur={e=>e.target.style.borderColor=P.border}/>
+            <Btn onClick={addRoom} disabled={loading}>追加</Btn>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+            {rooms.map(r=>{
+              const rc=getRoomColor(rooms,r);
+              return (
+                <div key={r} style={{display:'flex',alignItems:'center',justifyContent:'space-between',background:'#f8faff',border:`1px solid ${P.border}`,borderRadius:'10px',padding:'11px 15px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                    <span style={{width:'10px',height:'10px',borderRadius:'50%',background:rc.border,display:'inline-block'}}/>
+                    <span style={{color:P.text,fontSize:'14px'}}>{r}</span>
+                  </div>
+                  <Btn variant="danger" size="sm" onClick={()=>onRemoveRoom(r)} disabled={rooms.length<=1}>削除</Btn>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Data / CSV ── */}
+      {tab==='data' && (
+        <div>
+          <Lbl>データ出力</Lbl>
+          <p style={{fontSize:'13px',color:P.muted,margin:'0 0 14px'}}>
+            すべての申請履歴をCSVファイルでダウンロードします（Excelで開けます）。
+          </p>
+          <Btn onClick={()=>exportCSV(reservations)}>📥 CSVをダウンロード（{reservations.length}件）</Btn>
+        </div>
+      )}
+
+      {/* ── Admin password ── */}
+      {tab==='admin' && (
+        <div>
+          <Lbl>管理者パスワード</Lbl>
+          <p style={{fontSize:'13px',color:P.muted,margin:'0 0 14px'}}>
+            設定すると、この設定画面を開くときにパスワードが必要になります。空欄で保存すると解除されます。
+          </p>
+          <div style={{display:'flex',gap:'8px'}}>
+            <input value={pw1} onChange={e=>setPw1(e.target.value)} type="password"
+              placeholder={adminPw?'設定済み（変更する場合のみ入力）':'新しいパスワード'}
+              style={{...IS,flex:1}}
+              onFocus={e=>e.target.style.borderColor=P.accent} onBlur={e=>e.target.style.borderColor=P.border}/>
+            <Btn onClick={()=>{ setAdminPw(pw1); setPw1(''); alert(pw1?'管理者パスワードを設定しました':'管理者パスワードを解除しました'); }}>保存</Btn>
+          </div>
+        </div>
+      )}
+
+      <div style={{display:'flex',justifyContent:'flex-end',marginTop:'22px'}}>
+        <Btn variant="ghost" onClick={onClose}>閉じる</Btn>
       </div>
     </Modal>
   );
@@ -785,6 +871,8 @@ function App() {
   const [mailRecipients,setMailRecipients] = useState(['k2216001@maniwa.gse.okayama-c.ed.jp']);
   const [gasUrl,setGasUrl] = useState('');
   const [showSettings,setShowSettings] = useState(false);
+  const [adminPw,setAdminPw] = useState('');
+  const [settingsGate,setSettingsGate] = useState(false); // password prompt before settings
 
   useEffect(() => {
     let u1,u2;
@@ -813,6 +901,20 @@ function App() {
   };
 
   const handleSlotClick = ({date, startTime, endTime}) => {
+    // 既に予約が入っている時間帯なら新規申請させない
+    const sM = parseInt(startTime.slice(0,2))*60 + parseInt(startTime.slice(3,5));
+    const eM = parseInt(endTime.slice(0,2))*60 + parseInt(endTime.slice(3,5));
+    const conflict = reservations.some(r => {
+      if (r.status === '取消') return false;
+      if (!(r.startDate <= date && r.endDate >= date)) return false;
+      const rs = parseInt(r.startTime.slice(0,2))*60 + parseInt(r.startTime.slice(3,5));
+      const re = parseInt(r.endTime.slice(0,2))*60 + parseInt(r.endTime.slice(3,5));
+      return sM < re && eM > rs; // 時間が重なる
+    });
+    if (conflict) {
+      alert('その時間帯はすでに予約が入っています。別の時間を選んでください。');
+      return;
+    }
     setFormPrefill({date, startTime, endTime});
     setShowForm(true);
   };
@@ -826,40 +928,45 @@ function App() {
   const handleMonthDayClick = ds => { setDayDate(ds); setViewMode('day'); };
   const handleResClick = r => setDetailRes(r);
 
-  const TABS = [{id:'calendar',label:'📅 カレンダー'},{id:'history',label:'📋 履歴'},{id:'rooms',label:'🏢 会議室管理'}];
+  const openSettings = () => {
+    if (adminPw) setSettingsGate(true);   // require password
+    else setShowSettings(true);
+  };
+
+  const TABS = [{id:'calendar',label:'📅 カレンダー'},{id:'history',label:'📋 履歴'}];
   const [mainTab, setMainTab] = useState('calendar');
 
   const activeCount = reservations.filter(r=>r.status==='申請中').length;
 
   return (
-    <div style={{minHeight:'100vh',background:P.bg,display:'flex',flexDirection:'column'}}>
+    <div style={{height:'100vh',background:P.bg,display:'flex',flexDirection:'column',overflow:'hidden'}}>
       {/* Header */}
-      <div style={{background:P.header,padding:'0 20px',position:'sticky',top:0,zIndex:100,boxShadow:'0 2px 12px rgba(44,58,80,0.25)'}}>
-        <div style={{maxWidth:'1200px',margin:'0 auto',display:'flex',alignItems:'center',gap:'12px',padding:'12px 0',flexWrap:'wrap'}}>
-          <div>
-            <div style={{fontSize:'16px',fontWeight:800,color:'#fff',letterSpacing:'0.04em'}}>🏢 会議室予約システム</div>
-            <div style={{fontSize:'10px',color:'rgba(255,255,255,0.55)',letterSpacing:'0.12em'}}>MEETING ROOM RESERVATION</div>
+      <div style={{background:P.header,padding:'0 16px',position:'sticky',top:0,zIndex:100,boxShadow:'0 2px 12px rgba(44,58,80,0.25)'}}>
+        {/* Row 1: title + LIVE + settings */}
+        <div style={{maxWidth:'1200px',margin:'0 auto',display:'flex',alignItems:'center',gap:'10px',padding:'10px 0'}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:'15px',fontWeight:800,color:'#fff',letterSpacing:'0.03em',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>🏢 会議室予約システム</div>
+            <div style={{fontSize:'9px',color:'rgba(255,255,255,0.5)',letterSpacing:'0.1em'}}>MEETING ROOM RESERVATION</div>
           </div>
-          <div style={{display:'flex',alignItems:'center',gap:'5px',marginLeft:'6px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'4px'}}>
             <span style={{width:'7px',height:'7px',borderRadius:'50%',background:ready?'#7de8c0':'#aaa',display:'inline-block',animation:'pulse 2s infinite'}}/>
             <span style={{fontSize:'11px',color:ready?'#7de8c0':'#aaa'}}>{ready?'LIVE':'接続中'}</span>
           </div>
-
-          {mainTab==='calendar' && (
-            <div style={{display:'flex',gap:'4px',marginLeft:'16px',background:'rgba(255,255,255,0.12)',borderRadius:'8px',padding:'3px'}}>
-              {[{id:'month',label:'月'},{id:'week',label:'週'},{id:'day',label:'日'}].map(v=>(
-                <button key={v.id} onClick={()=>setViewMode(v.id)} style={{padding:'4px 12px',borderRadius:'6px',border:'none',fontFamily:'inherit',fontSize:'12px',fontWeight:700,cursor:'pointer',background:viewMode===v.id?'#fff':'transparent',color:viewMode===v.id?P.header:'rgba(255,255,255,0.75)',transition:'all 0.15s'}}>{v.label}</button>
-              ))}
-            </div>
-          )}
-
-          <div style={{marginLeft:'auto',display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}}>
-            {activeCount>0 && <span style={{background:'#e8a87c',color:'#fff',borderRadius:'20px',padding:'3px 10px',fontSize:'12px',fontWeight:700}}>申請中 {activeCount}件</span>}
-            <Btn onClick={()=>{setFormPrefill(null);setShowForm(true);}}>＋ 新規申請</Btn>
-            <Btn variant="ghost" size="sm" style={{color:'rgba(255,255,255,0.75)',border:'1px solid rgba(255,255,255,0.3)'}} onClick={()=>exportCSV(reservations)}>CSV</Btn>
-            <Btn variant="ghost" size="sm" style={{color:'rgba(255,255,255,0.75)',border:'1px solid rgba(255,255,255,0.3)'}} onClick={()=>setShowSettings(true)}>⚙️ 設定</Btn>
-          </div>
+          <button onClick={openSettings} style={{background:'rgba(255,255,255,0.12)',border:'1px solid rgba(255,255,255,0.25)',color:'#fff',borderRadius:'8px',padding:'6px 12px',cursor:'pointer',fontFamily:'inherit',fontSize:'13px',fontWeight:600}}>⚙️ 設定</button>
         </div>
+
+        {/* Row 2: view modes + new reservation (always visible) */}
+        <div style={{maxWidth:'1200px',margin:'0 auto',display:'flex',alignItems:'center',gap:'8px',paddingBottom:'10px',flexWrap:'wrap'}}>
+          <div style={{display:'flex',gap:'4px',background:'rgba(255,255,255,0.12)',borderRadius:'8px',padding:'3px'}}>
+            {[{id:'month',label:'月'},{id:'week',label:'週'},{id:'day',label:'日'}].map(v=>(
+              <button key={v.id} onClick={()=>{setMainTab('calendar');setViewMode(v.id);}} style={{padding:'5px 16px',borderRadius:'6px',border:'none',fontFamily:'inherit',fontSize:'13px',fontWeight:700,cursor:'pointer',background:(mainTab==='calendar'&&viewMode===v.id)?'#fff':'transparent',color:(mainTab==='calendar'&&viewMode===v.id)?P.header:'rgba(255,255,255,0.78)',transition:'all 0.15s'}}>{v.label}</button>
+            ))}
+          </div>
+          <Btn onClick={()=>{setFormPrefill(null);setShowForm(true);}} style={{background:'#fff',color:P.header}}>＋ 新規申請</Btn>
+          {activeCount>0 && <span style={{background:'#e8a87c',color:'#fff',borderRadius:'20px',padding:'3px 10px',fontSize:'12px',fontWeight:700,marginLeft:'auto'}}>申請中 {activeCount}件</span>}
+        </div>
+
+        {/* Row 3: main tabs */}
         <div style={{display:'flex',maxWidth:'1200px',margin:'0 auto'}}>
           {TABS.map(t=>(
             <button key={t.id} onClick={()=>setMainTab(t.id)} style={{background:'none',border:'none',color:mainTab===t.id?'#fff':'rgba(255,255,255,0.55)',padding:'9px 16px',cursor:'pointer',fontFamily:'inherit',fontSize:'13px',fontWeight:700,borderBottom:mainTab===t.id?'2px solid #fff':'2px solid transparent',letterSpacing:'0.04em'}}>
@@ -870,11 +977,11 @@ function App() {
       </div>
 
       {/* Main */}
-      <div style={{flex:1,maxWidth:'1200px',width:'100%',margin:'0 auto',padding:'16px',display:'flex',flexDirection:'column',minHeight:0}}>
+      <div style={{flex:1,maxWidth:'1200px',width:'100%',margin:'0 auto',padding:'12px',display:'flex',flexDirection:'column',minHeight:0,overflow:'hidden'}}>
         {!ready ? <Spinner/> : fireErr ? (
           <div style={{background:'#fce8ee',border:`1px solid ${P.danger}`,borderRadius:'12px',padding:'20px',color:P.danger}}>{fireErr}</div>
         ) : (
-          <div style={{background:P.panel,borderRadius:'16px',boxShadow:'0 2px 16px rgba(44,58,80,0.08)',border:`1px solid ${P.border}`,overflow:'hidden',flex:1,display:'flex',flexDirection:'column',minHeight:'600px'}}>
+          <div style={{background:P.panel,borderRadius:'16px',boxShadow:'0 2px 16px rgba(44,58,80,0.08)',border:`1px solid ${P.border}`,overflow:'hidden',flex:1,display:'flex',flexDirection:'column',minHeight:0}}>
             {mainTab==='calendar' && viewMode==='day' && (
               <DayView dateStr={dayDate} reservations={reservations} rooms={rooms}
                 onNavigate={d=>handleDayNav(d)} onSlotClick={handleSlotClick} onResClick={handleResClick}/>
@@ -888,7 +995,6 @@ function App() {
                 onNavigate={d=>handleMonthNav(d)} onDayClick={handleMonthDayClick}/>
             )}
             {mainTab==='history' && <HistView reservations={reservations} rooms={rooms} onEdit={reqEdit} onCancel={reqCancel}/>}
-            {mainTab==='rooms'   && <RoomMgr rooms={rooms} onAdd={addRoom} onRemove={removeRoom} loading={busy}/>}
           </div>
         )}
       </div>
@@ -911,8 +1017,17 @@ function App() {
         <SettingsModal
           gasUrl={gasUrl} setGasUrl={setGasUrl}
           recipients={mailRecipients} setRecipients={setMailRecipients}
+          rooms={rooms} onAddRoom={addRoom} onRemoveRoom={removeRoom}
+          reservations={reservations}
+          adminPw={adminPw} setAdminPw={setAdminPw}
+          loading={busy}
           onClose={()=>setShowSettings(false)}
         />
+      )}
+      {settingsGate && (
+        <AdminGate adminPw={adminPw}
+          onConfirm={()=>{setSettingsGate(false);setShowSettings(true);}}
+          onCancel={()=>setSettingsGate(false)}/>
       )}
     </div>
   );
