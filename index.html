@@ -242,17 +242,19 @@ const ResForm = ({rooms, onSubmit, onClose, initial=null, loading, prefill=null}
   );
 };
 
-// ── Day View (touch-friendly) ───────────────────────────────
+// ── Day View (Google-Calendar-like UX) ─────────────────────
 const CELL_H = 64;
 const DAY_HOURS = 24;
+const LONGPRESS_MS = 350;   // hold this long to start selecting a time range
+const SWIPE_THRESH = 60;    // px horizontal swipe to change day
 
 const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResClick}) => {
   const active = reservations.filter(r => r.status !== '取消' && r.startDate <= dateStr && r.endDate >= dateStr);
   const scrollRef = useRef(null);
   const gridRef   = useRef(null);
-  const [dragVis, setDragVis] = useState(null);     // visible selection
-  const [dragging, setDragging] = useState(false);  // true once a drag is committed
-  const dragRef = useRef(null);
+  const [dragVis, setDragVis] = useState(null);
+  const [selecting, setSelecting] = useState(false);
+  const [swipeX, setSwipeX] = useState(0);          // live horizontal offset feedback
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 8 * CELL_H;
@@ -265,78 +267,100 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
     return Math.max(0, Math.min(23*60+30, Math.round((relY/CELL_H)*60/30)*30));
   };
 
-  // ── Native (non-passive) touch listeners so preventDefault works on iOS ──
+  // ── Touch logic: long-press → select | horizontal swipe → change day | else scroll ──
   useEffect(() => {
     const grid = gridRef.current;
     if (!grid) return;
 
-    let startY = null, startX = null, started = false, committed = false;
-    const TH = 6;
+    let sx=0, sy=0, t0=0;
+    let mode = null;          // null | 'select' | 'swipe' | 'scroll'
+    let lpTimer = null;
+    let selStart = 0;
+
+    const clearLP = () => { if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } };
 
     const onStart = (e) => {
       if (e.target.closest('[data-res]')) return;
       const t = e.touches[0];
-      startY = t.clientY; startX = t.clientX;
-      started = true; committed = false;
-      dragRef.current = null;
+      sx = t.clientX; sy = t.clientY; t0 = Date.now();
+      mode = null;
+      selStart = yToMin(t.clientY);
+      // long-press timer → enter selection mode
+      lpTimer = setTimeout(() => {
+        mode = 'select';
+        setSelecting(true);
+        const min = yToMin(sy);
+        selStart = min;
+        setDragVis({ startMin: min, endMin: min + 60 });
+        if (navigator.vibrate) navigator.vibrate(15);
+      }, LONGPRESS_MS);
     };
 
     const onMove = (e) => {
-      if (!started) return;
       const t = e.touches[0];
-      const dy = t.clientY - startY;
-      const dx = t.clientX - startX;
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
 
-      if (!committed) {
-        // wait until enough movement to decide
-        if (Math.abs(dy) < TH && Math.abs(dx) < TH) return;
-        // if touch began in the time-label column, let it scroll
-        const rect = gridRef.current.getBoundingClientRect();
-        if (startX - rect.left < 50) { started = false; return; }
-        // commit to drag-select
-        committed = true;
-        setDragging(true);
-        const min = yToMin(startY);
-        dragRef.current = { startMin: min, endMin: Math.max(min+30, yToMin(t.clientY)+30) };
-        setDragVis({...dragRef.current});
+      if (mode === null) {
+        // decide direction before long-press fires
+        if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) {
+          // horizontal → swipe day, cancel long-press
+          clearLP();
+          mode = 'swipe';
+        } else if (Math.abs(dy) > 10) {
+          // vertical → normal scroll, cancel long-press
+          clearLP();
+          mode = 'scroll';
+        }
       }
 
-      if (committed) {
-        e.preventDefault();   // block page scroll — works because listener is non-passive
+      if (mode === 'swipe') {
+        e.preventDefault();
+        setSwipeX(dx);
+      } else if (mode === 'select') {
+        e.preventDefault();
         const min = yToMin(t.clientY);
-        const next = { startMin: dragRef.current.startMin, endMin: Math.max(dragRef.current.startMin+30, min+30) };
-        dragRef.current = next;
-        setDragVis({...next});
+        const startMin = Math.min(selStart, min);
+        const endMin   = Math.max(selStart + 30, min + 30, Math.max(selStart,min)+30);
+        setDragVis({ startMin: Math.min(selStart,min), endMin: Math.max(selStart+30, min+30) });
       }
+      // mode === 'scroll' → do nothing, browser scrolls naturally
     };
 
-    const onEnd = () => {
-      if (!started) { return; }
-      if (committed && dragRef.current) {
-        const {startMin, endMin} = dragRef.current;
-        onSlotClick({date:dateStr, startTime:minToTime(startMin), endTime:minToTime(Math.min(endMin,24*60))});
-      } else if (!committed && startY !== null) {
-        // simple tap → 1-hour slot
-        const min = yToMin(startY);
+    const onEnd = (e) => {
+      clearLP();
+      if (mode === 'swipe') {
+        const dx = (e.changedTouches[0].clientX) - sx;
+        if (Math.abs(dx) > SWIPE_THRESH) onNavigate(dx < 0 ? 1 : -1);
+        setSwipeX(0);
+      } else if (mode === 'select') {
+        const cur = dragVisRef.current;
+        if (cur) onSlotClick({date:dateStr, startTime:minToTime(cur.startMin), endTime:minToTime(Math.min(cur.endMin,24*60))});
+        setSelecting(false); setDragVis(null);
+      } else if (mode === null) {
+        // quick tap (released before long-press) → 1-hour slot
+        const min = yToMin(sy);
         onSlotClick({date:dateStr, startTime:minToTime(min), endTime:minToTime(Math.min(min+60,24*60))});
       }
-      started = false; committed = false; dragRef.current = null;
-      setDragging(false); setDragVis(null);
+      mode = null;
     };
 
     grid.addEventListener('touchstart', onStart, {passive:true});
     grid.addEventListener('touchmove',  onMove,  {passive:false});
     grid.addEventListener('touchend',   onEnd,   {passive:true});
-    grid.addEventListener('touchcancel',onEnd,   {passive:true});
+    grid.addEventListener('touchcancel',()=>{clearLP();mode=null;setSelecting(false);setDragVis(null);setSwipeX(0);}, {passive:true});
     return () => {
       grid.removeEventListener('touchstart', onStart);
       grid.removeEventListener('touchmove',  onMove);
       grid.removeEventListener('touchend',   onEnd);
-      grid.removeEventListener('touchcancel',onEnd);
     };
-  }, [dateStr, onSlotClick]);
+  }, [dateStr, onSlotClick, onNavigate]);
 
-  // ── Mouse (desktop) ───────────────────────────────────────
+  // keep latest dragVis in a ref for touchend closure
+  const dragVisRef = useRef(null);
+  useEffect(() => { dragVisRef.current = dragVis; }, [dragVis]);
+
+  // ── Mouse (desktop): drag to select ───────────────────────
   const mouseRef = useRef(null);
   const handleMouseDown = (e) => {
     if (e.button !== 0 || e.target.closest('[data-res]')) return;
@@ -367,11 +391,9 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
   return (
     <div style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
 
-      {/* ── Date nav bar (always visible, sticky at top of panel) ── */}
-      <div style={{
-        flexShrink:0,background:P.panel,borderBottom:`1px solid ${P.border}`,
-        display:'flex',alignItems:'center',boxShadow:'0 2px 8px rgba(44,58,80,0.07)',zIndex:30,
-      }}>
+      {/* ── Date nav bar (always visible) ── */}
+      <div style={{flexShrink:0,background:P.panel,borderBottom:`1px solid ${P.border}`,
+        display:'flex',alignItems:'center',boxShadow:'0 2px 8px rgba(44,58,80,0.07)',zIndex:30}}>
         <button onClick={()=>onNavigate(-1)} style={{flex:'0 0 56px',height:'62px',background:'#f2f5fa',border:'none',
           fontSize:'24px',color:P.accent,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>‹</button>
         <div style={{flex:1,textAlign:'center',padding:'7px 0'}}>
@@ -389,16 +411,22 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
           fontSize:'24px',color:P.accent,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}>›</button>
       </div>
 
-      {/* ── Scrollable grid ─────────────────────────────────── */}
-      <div ref={scrollRef} style={{overflowY:'auto',flex:1,WebkitOverflowScrolling:'touch'}}>
+      {/* hint */}
+      <div style={{flexShrink:0,textAlign:'center',fontSize:'11px',color:P.dim,padding:'4px 0',background:'#f8faff',borderBottom:`1px solid ${P.border}`}}>
+        長押しで時間帯を選択／左右スワイプで日付移動
+      </div>
+
+      {/* ── Scrollable grid ── */}
+      <div ref={scrollRef} style={{overflowY:'auto',flex:1,WebkitOverflowScrolling:'touch',overflowX:'hidden'}}>
         <div ref={gridRef}
           style={{position:'relative',height:`${DAY_HOURS*CELL_H}px`,display:'flex',
             userSelect:'none',WebkitUserSelect:'none',
-            touchAction: dragging ? 'none' : 'pan-y'}}
+            transform: swipeX ? `translateX(${swipeX}px)` : 'none',
+            transition: swipeX ? 'none' : 'transform 0.2s',
+            touchAction: selecting ? 'none' : 'pan-y'}}
           onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
 
-          {/* hour labels */}
           <div style={{width:'50px',flexShrink:0}}>
             {HOURS.map(h => (
               <div key={h} style={{height:`${CELL_H}px`,display:'flex',alignItems:'flex-start',
@@ -408,7 +436,6 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
             ))}
           </div>
 
-          {/* grid + events */}
           <div style={{flex:1,position:'relative',borderLeft:`1px solid ${P.border}`}}>
             {HOURS.map(h => (
               <div key={h} style={{height:`${CELL_H}px`,
@@ -420,7 +447,7 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
               <div style={{position:'absolute',left:'3px',right:'3px',
                 top:`${(dragVis.startMin/60)*CELL_H}px`,
                 height:`${((dragVis.endMin-dragVis.startMin)/60)*CELL_H}px`,
-                background:P.accent+'28',border:`2px solid ${P.accent}`,borderRadius:'8px',
+                background:P.accent+'30',border:`2px solid ${P.accent}`,borderRadius:'8px',
                 pointerEvents:'none',zIndex:5,display:'flex',flexDirection:'column',
                 justifyContent:'space-between',padding:'5px 8px'}}>
                 <span style={{fontSize:'13px',color:P.accent,fontWeight:700}}>{minToTime(dragVis.startMin)}</span>
