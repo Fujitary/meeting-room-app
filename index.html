@@ -513,14 +513,20 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
   );
 };
 
-// ── Week View ─────────────────────────────────────────────
+// ── Week View (touch: long-press select / h-swipe week) ──────
 const WeekView = ({startDate, reservations, rooms, onNavigate, onSlotClick, onResClick}) => {
   const scrollRef = useRef(null);
+  const gridRef   = useRef(null);
+  const [dragVis, setDragVis] = useState(null);   // {dayIndex, startMin, endMin}
+  const [selecting, setSelecting] = useState(false);
+  const [swipeX, setSwipeX] = useState(0);
+  const dragVisRef = useRef(null);
+  useEffect(() => { dragVisRef.current = dragVis; }, [dragVis]);
+
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 8 * CELL_H; }, [startDate]);
 
   const days = Array.from({length:7}, (_,i) => dsAdd(startDate, i));
   const todayStr = today();
-
   const getActive = ds => reservations.filter(r => r.status !== '取消' && r.startDate <= ds && r.endDate >= ds);
 
   const [,sm,] = startDate.split('-');
@@ -529,57 +535,157 @@ const WeekView = ({startDate, reservations, rooms, onNavigate, onSlotClick, onRe
     ? `${startDate.split('-')[0]}年${+sm}月`
     : `${startDate.split('-')[0]}年${+sm}月〜${+em}月`;
 
+  const LABEL_W = 52; // px width of hour-label column
+
+  // map a touch X to which day column (0-6), or -1 if on label column
+  const xToDay = (clientX) => {
+    if (!gridRef.current) return -1;
+    const rect = gridRef.current.getBoundingClientRect();
+    const x = clientX - rect.left;
+    if (x < LABEL_W) return -1;
+    const colW = (rect.width - LABEL_W) / 7;
+    return Math.max(0, Math.min(6, Math.floor((x - LABEL_W) / colW)));
+  };
+  const yToMin = (clientY) => {
+    if (!gridRef.current) return 0;
+    const rect = gridRef.current.getBoundingClientRect();
+    const relY = clientY - rect.top;
+    return Math.max(0, Math.min(23*60+30, Math.round((relY/CELL_H)*60/30)*30));
+  };
+
+  // ── Touch handling ──
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+    let sx=0, sy=0, t0=0, mode=null, lpFired=false, lpTimer=null, selStart=0, selDay=0, tapped=false;
+    const LP_MOVE_TOL=14, DIR_TOL=12;
+    const clearLP = () => { if(lpTimer){clearTimeout(lpTimer);lpTimer=null;} };
+
+    const onStart = (e) => {
+      if (e.target.closest('[data-res]')) { tapped=false; return; }
+      tapped=true; lpFired=false;
+      const t=e.touches[0]; sx=t.clientX; sy=t.clientY; t0=Date.now(); mode=null;
+      selDay=xToDay(t.clientX); selStart=yToMin(t.clientY);
+      if (selDay < 0) { tapped=false; return; } // label column → normal scroll
+      lpTimer=setTimeout(()=>{
+        lpFired=true; mode='select'; setSelecting(true);
+        setDragVis({dayIndex:selDay, startMin:selStart, endMin:selStart+60});
+        if(navigator.vibrate) navigator.vibrate(20);
+      }, LONGPRESS_MS);
+    };
+    const onMove = (e) => {
+      if (!tapped) return;
+      const t=e.touches[0]; const dx=t.clientX-sx; const dy=t.clientY-sy;
+      if (!lpFired && mode===null) {
+        if (Math.abs(dx)>DIR_TOL && Math.abs(dx)>Math.abs(dy)) { clearLP(); mode='swipe'; }
+        else if (Math.abs(dy)>LP_MOVE_TOL) { clearLP(); mode='scroll'; }
+        if (mode===null) return;
+      }
+      if (mode==='swipe') { e.preventDefault(); setSwipeX(dx); }
+      else if (mode==='select') {
+        e.preventDefault();
+        const min=yToMin(t.clientY);
+        setDragVis({dayIndex:selDay, startMin:Math.min(selStart,min), endMin:Math.max(selStart+30,min+30)});
+      }
+    };
+    const onEnd = (e) => {
+      clearLP();
+      if (!tapped) return; tapped=false;
+      const ct=e.changedTouches[0];
+      const dyTotal=Math.abs(ct.clientY-sy), dxTotal=Math.abs(ct.clientX-sx), dt=Date.now()-t0;
+      if (mode==='swipe') {
+        setSwipeX(0);
+        const dx=ct.clientX-sx;
+        if (Math.abs(dx)>SWIPE_THRESH) onNavigate(dx<0?7:-7);
+      } else if (mode==='select' || lpFired) {
+        const cur=dragVisRef.current;
+        setSelecting(false); setDragVis(null);
+        if (cur) onSlotClick({date:days[cur.dayIndex], startTime:minToTime(cur.startMin), endTime:minToTime(Math.min(cur.endMin,24*60))});
+      } else if (mode===null && dyTotal<12 && dxTotal<12 && dt<LONGPRESS_MS) {
+        const d=xToDay(sx), min=yToMin(sy);
+        if (d>=0) onSlotClick({date:days[d], startTime:minToTime(min), endTime:minToTime(Math.min(min+60,24*60))});
+      }
+      mode=null; lpFired=false;
+    };
+    const onCancel = () => { clearLP(); tapped=false;mode=null;lpFired=false; setSelecting(false);setDragVis(null);setSwipeX(0); };
+
+    grid.addEventListener('touchstart', onStart, {passive:true});
+    grid.addEventListener('touchmove',  onMove,  {passive:false});
+    grid.addEventListener('touchend',   onEnd,   {passive:true});
+    grid.addEventListener('touchcancel',onCancel,{passive:true});
+    return () => {
+      grid.removeEventListener('touchstart', onStart);
+      grid.removeEventListener('touchmove',  onMove);
+      grid.removeEventListener('touchend',   onEnd);
+      grid.removeEventListener('touchcancel',onCancel);
+    };
+  }, [startDate, onSlotClick, onNavigate]);
+
   return (
-    <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
-      <div style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 14px',borderBottom:`1px solid ${P.border}`,background:P.panel,flexShrink:0}}>
-        <button onClick={()=>onNavigate(-7)} style={{background:'#eef1f7',border:'none',borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'16px',color:P.muted}}>‹</button>
+    <div style={{display:'flex',flexDirection:'column',height:'100%',minHeight:0}}>
+      {/* nav bar */}
+      <div style={{flexShrink:0,display:'flex',alignItems:'center',padding:'8px 6px',borderBottom:`1px solid ${P.border}`,background:P.panel,zIndex:30}}>
+        <button onClick={()=>onNavigate(-7)} style={{flex:'0 0 50px',height:'46px',background:'#f2f5fa',border:'none',borderRadius:'8px',fontSize:'22px',color:P.accent,cursor:'pointer'}}>‹</button>
         <span style={{flex:1,textAlign:'center',fontWeight:700,fontSize:'15px',color:P.text}}>{label}</span>
-        <button onClick={()=>onNavigate(7)} style={{background:'#eef1f7',border:'none',borderRadius:'6px',padding:'5px 12px',cursor:'pointer',fontSize:'16px',color:P.muted}}>›</button>
+        <button onClick={()=>onNavigate(7)} style={{flex:'0 0 50px',height:'46px',background:'#f2f5fa',border:'none',borderRadius:'8px',fontSize:'22px',color:P.accent,cursor:'pointer'}}>›</button>
       </div>
 
-      {/* day headers */}
-      <div style={{display:'grid',gridTemplateColumns:'52px repeat(7,1fr)',background:P.panel,borderBottom:`1px solid ${P.border}`,flexShrink:0}}>
+      <div style={{flexShrink:0,textAlign:'center',fontSize:'11px',color:P.dim,padding:'4px 0',background:'#f8faff',borderBottom:`1px solid ${P.border}`}}>
+        長押しで時間帯を選択／左右スワイプで週移動
+      </div>
+
+      {/* day headers (fixed) */}
+      <div style={{flexShrink:0,display:'grid',gridTemplateColumns:`${LABEL_W}px repeat(7,1fr)`,background:P.panel,borderBottom:`1px solid ${P.border}`}}>
         <div/>
-        {days.map((ds,i) => {
-          const [y,m,d] = ds.split('-').map(Number);
-          const isToday = ds === todayStr;
-          const dow = (new Date(y,m-1,d)).getDay();
+        {days.map((ds)=>{
+          const [yy,mm,dd]=ds.split('-').map(Number);
+          const isT=ds===todayStr; const dow=new Date(yy,mm-1,dd).getDay();
           return (
-            <div key={ds} style={{textAlign:'center',padding:'8px 4px',borderLeft:`1px solid ${P.border}`}}>
-              <div style={{fontSize:'11px',color:dow===0?P.danger:dow===6?P.accentL:P.muted}}>{WD[dow]}</div>
-              <div style={{fontSize:'16px',fontWeight:700,color:isToday?'#fff':dow===0?P.danger:dow===6?P.accentL:P.text,background:isToday?P.accent:'none',borderRadius:'50%',width:'30px',height:'30px',display:'flex',alignItems:'center',justifyContent:'center',margin:'2px auto'}}>{d}</div>
+            <div key={ds} style={{textAlign:'center',padding:'6px 2px',borderLeft:`1px solid ${P.border}`}}>
+              <div style={{fontSize:'10px',color:dow===0?P.danger:dow===6?P.accentL:P.muted}}>{WD[dow]}</div>
+              <div style={{fontSize:'15px',fontWeight:700,color:isT?'#fff':dow===0?P.danger:dow===6?P.accentL:P.text,background:isT?P.accent:'none',borderRadius:'50%',width:'26px',height:'26px',display:'flex',alignItems:'center',justifyContent:'center',margin:'2px auto'}}>{dd}</div>
             </div>
           );
         })}
       </div>
 
-      <div ref={scrollRef} style={{overflowY:'auto',flex:1}}>
-        <div style={{display:'grid',gridTemplateColumns:'52px repeat(7,1fr)',height:`${DAY_HOURS*CELL_H}px`,position:'relative'}}>
+      {/* scrollable grid */}
+      <div ref={scrollRef} style={{overflowY:'auto',flex:1,WebkitOverflowScrolling:'touch',overflowX:'hidden'}}>
+        <div ref={gridRef} className="day-grid"
+          style={{display:'grid',gridTemplateColumns:`${LABEL_W}px repeat(7,1fr)`,height:`${DAY_HOURS*CELL_H}px`,position:'relative',
+            userSelect:'none',WebkitUserSelect:'none',
+            transform: swipeX ? `translateX(${swipeX}px)` : 'none',
+            transition: swipeX ? 'none' : 'transform 0.2s',
+            touchAction: selecting ? 'none' : 'pan-y'}}>
           {/* hour labels */}
           <div>
             {HOURS.map(h => (
               <div key={h} style={{height:`${CELL_H}px`,display:'flex',alignItems:'flex-start',justifyContent:'flex-end',paddingRight:'6px',paddingTop:'2px'}}>
-                <span style={{fontSize:'10px',color:P.dim}}>{pad(h)}:00</span>
+                <span style={{fontSize:'10px',color:P.dim,pointerEvents:'none'}}>{pad(h)}:00</span>
               </div>
             ))}
           </div>
-          {/* columns */}
+          {/* day columns */}
           {days.map((ds,ci) => (
-            <div key={ds} style={{borderLeft:`1px solid ${P.border}`,position:'relative',cursor:'pointer'}}
-              onClick={e=>{
-                if (e.target.closest('[data-res]')) return;
-                const rect = e.currentTarget.getBoundingClientRect();
-                const relY = e.clientY - rect.top;
-                const min = Math.round((relY / CELL_H) * 60 / 30) * 30;
-                onSlotClick({date:ds, startTime:minToTime(min), endTime:minToTime(Math.min(min+60,24*60))});
-              }}>
-              {HOURS.map(h => <div key={h} style={{height:`${CELL_H}px`,borderBottom:`1px solid ${P.border}88`}}/>)}
+            <div key={ds} style={{borderLeft:`1px solid ${P.border}`,position:'relative'}}>
+              {HOURS.map(h => <div key={h} style={{height:`${CELL_H}px`,borderBottom:`1px solid ${P.border}88`,pointerEvents:'none'}}/>)}
+
+              {/* selection ghost (only in active column) */}
+              {dragVis && dragVis.dayIndex===ci && (
+                <div style={{position:'absolute',left:'1px',right:'1px',
+                  top:`${(dragVis.startMin/60)*CELL_H}px`,
+                  height:`${((dragVis.endMin-dragVis.startMin)/60)*CELL_H}px`,
+                  background:P.accent+'30',border:`2px solid ${P.accent}`,borderRadius:'5px',
+                  pointerEvents:'none',zIndex:6}}/>
+              )}
+
               {getActive(ds).map(r => {
-                const sm2 = timeToMin(r.startTime), em2 = timeToMin(r.endTime);
-                const rc = getRoomColor(rooms, r.room);
+                const sm2=timeToMin(r.startTime), em2=timeToMin(r.endTime);
+                const rc=getRoomColor(rooms,r.room);
                 return (
                   <div key={r.id} data-res="1" onClick={e=>{e.stopPropagation();onResClick(r);}}
-                    style={{position:'absolute',left:'2px',right:'2px',top:`${(sm2/60)*CELL_H}px`,height:`${(Math.max(em2-sm2,30)/60)*CELL_H}px`,background:rc.bg,borderLeft:`3px solid ${rc.border}`,borderRadius:'4px',padding:'2px 5px',cursor:'pointer',overflow:'hidden',zIndex:10,boxShadow:'0 1px 3px rgba(44,58,80,0.1)'}}>
+                    style={{position:'absolute',left:'2px',right:'2px',top:`${(sm2/60)*CELL_H}px`,height:`${(Math.max(em2-sm2,30)/60)*CELL_H}px`,
+                      background:rc.bg,borderLeft:`3px solid ${rc.border}`,borderRadius:'4px',padding:'2px 5px',cursor:'pointer',overflow:'hidden',zIndex:10,boxShadow:'0 1px 3px rgba(44,58,80,0.1)'}}>
                     <div style={{fontSize:'10px',fontWeight:700,color:rc.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.room}</div>
                     <div style={{fontSize:'10px',color:rc.border,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{r.startTime}〜{r.endTime}</div>
                   </div>
