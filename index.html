@@ -278,9 +278,10 @@ const DayView = ({dateStr, reservations, rooms, onNavigate, onSlotClick, onResCl
   }, [dateStr]);
 
   const yToMin = (clientY) => {
-    if (!gridRef.current || !scrollRef.current) return 0;
+    if (!gridRef.current) return 0;
     const rect = gridRef.current.getBoundingClientRect();
-    const relY = clientY - rect.top + scrollRef.current.scrollTop;
+    // rect.top already reflects current scroll position, so do NOT add scrollTop
+    const relY = clientY - rect.top;
     return Math.max(0, Math.min(23*60+30, Math.round((relY/CELL_H)*60/30)*30));
   };
 
@@ -568,7 +569,7 @@ const WeekView = ({startDate, reservations, rooms, onNavigate, onSlotClick, onRe
               onClick={e=>{
                 if (e.target.closest('[data-res]')) return;
                 const rect = e.currentTarget.getBoundingClientRect();
-                const relY = e.clientY - rect.top + scrollRef.current.scrollTop;
+                const relY = e.clientY - rect.top;
                 const min = Math.round((relY / CELL_H) * 60 / 30) * 30;
                 onSlotClick({date:ds, startTime:minToTime(min), endTime:minToTime(Math.min(min+60,24*60))});
               }}>
@@ -753,7 +754,7 @@ const AdminGate = ({adminPw, onConfirm, onCancel}) => {
 // ── Settings Modal (tabbed) ──────────────────────────────
 const SettingsModal = ({gasUrl, setGasUrl, recipients, setRecipients,
                         rooms, onAddRoom, onRemoveRoom, reservations,
-                        adminPw, setAdminPw, onClose, loading}) => {
+                        adminPw, setAdminPw, onDeleteCancelled, onClose, loading}) => {
   const [tab, setTab] = useState('mail');
   const [newAddr, setNewAddr] = useState('');
   const [newRoom, setNewRoom] = useState('');
@@ -849,6 +850,30 @@ const SettingsModal = ({gasUrl, setGasUrl, recipients, setRecipients,
             すべての申請履歴をCSVファイルでダウンロードします（Excelで開けます）。
           </p>
           <Btn onClick={()=>exportCSV(reservations)}>📥 CSVをダウンロード（{reservations.length}件）</Btn>
+
+          <div style={{height:'1px',background:P.border,margin:'22px 0'}}/>
+
+          <Lbl>履歴の削除</Lbl>
+          <p style={{fontSize:'13px',color:P.muted,margin:'0 0 6px'}}>
+            取消済みの予約データをまとめて削除します。古い記録の整理に使います。
+          </p>
+          <p style={{fontSize:'12px',color:P.danger,margin:'0 0 12px'}}>
+            ⚠️ 削除したデータは元に戻せません。心配な場合は先にCSVを保存してください。
+          </p>
+          {(() => {
+            const cancelled = reservations.filter(r => r.status === '取消');
+            return (
+              <Btn variant="danger" disabled={cancelled.length===0 || loading}
+                onClick={() => {
+                  if (cancelled.length === 0) return;
+                  if (confirm(`取消済みの予約 ${cancelled.length}件 を完全に削除します。よろしいですか？`)) {
+                    onDeleteCancelled(cancelled);
+                  }
+                }}>
+                🗑 取消済みデータを一括削除（{cancelled.length}件）
+              </Btn>
+            );
+          })()}
         </div>
       )}
 
@@ -947,6 +972,7 @@ function App() {
   const addRes     = async form => { setBusy(true); try{ const now=new Date().toISOString(); const saved={...form,status:'申請中',createdAt:now,updatedAt:now}; await addD('meeting_reservations',saved); await sendMailViaGAS('sendReservation',form,mailRecipients); setShowForm(false);setFormPrefill(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
   const updateRes  = async form => { setBusy(true); try{ await updD('meeting_reservations',editTarget.id,{...form,updatedAt:new Date().toISOString()}); await sendMailViaGAS('sendUpdate',form,mailRecipients); setEditTarget(null);setDetailRes(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
   const cancelRes  = async ()  => { setBusy(true); try{ await updD('meeting_reservations',cancelTarget.id,{status:'取消',updatedAt:new Date().toISOString()}); await sendMailViaGAS('sendCancel',cancelTarget,mailRecipients); setCancelTarget(null);setDetailRes(null); }catch(e){alert(e.message);} finally{setBusy(false);} };
+  const deleteCancelled = async (list) => { setBusy(true); try{ for(const r of list){ await delD('meeting_reservations', r.id); } alert(list.length + '件の取消済みデータを削除しました'); }catch(e){alert(e.message);} finally{setBusy(false);} };
 
   const reqEdit   = r => { setDetailRes(null); setPwTarget(r); setPwAction('edit'); };
   const reqCancel = r => { setDetailRes(null); setPwTarget(r); setPwAction('cancel'); };
@@ -1076,6 +1102,7 @@ function App() {
           rooms={rooms} onAddRoom={addRoom} onRemoveRoom={removeRoom}
           reservations={reservations}
           adminPw={adminPw} setAdminPw={persistAdminPw}
+          onDeleteCancelled={deleteCancelled}
           loading={busy}
           onClose={()=>setShowSettings(false)}
         />
